@@ -54,7 +54,7 @@ Item("Towels", placements=[
 ])
 ```
 
-There's still only one "Towels" in the catalogue. One name, one colour, one set
+There's still only one "Towels" in the catalogue. One name, one color, one set
 of tags, with its 14 towels split across two places. If I'd let you create it
 twice instead, you'd have to rename it twice and retag it twice, and sooner or
 later the two copies would disagree with each other.
@@ -77,10 +77,10 @@ place. A container is a thing you open.
 
 | File | What's in it |
 |---|---|
-| `theme.py` | Every colour, size and font in the app. Start here to restyle. |
+| `theme.py` | Every color, size and font in the app. Start here to restyle. |
 | `models.py` | What a profile, floor, room, container, item and tag are |
 | `storage.py` | Loading and saving. One JSON file per profile. |
-| `widgets.py` | Shared UI pieces: colour picker, tag chips, dialogs |
+| `widgets.py` | Shared UI pieces: color picker, tag chips, dialogs |
 | `profile_screen.py` | The launcher, with the grid of profile cards |
 | `workspace.py` | The sidebar shell, the autosave timer, keyboard shortcuts |
 | `layout_section.py` | Floors, toolbar, and the wiring between canvas and inspector |
@@ -244,9 +244,9 @@ instead.
 
 ## Changing things
 
-Colours and sizes are all in `theme.py`, and no colour code appears anywhere
+Colors and sizes are all in `theme.py`, and no color code appears anywhere
 else in the project. If you ever find one somewhere else, it belongs in
-`theme.py`. Change `SWATCHES` to change the palette you get when colour-coding
+`theme.py`. Change `SWATCHES` to change the palette you get when color-coding
 things, and `GRID_SIZE` to change both the visible grid and what things snap
 to.
 
