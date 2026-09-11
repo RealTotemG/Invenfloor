@@ -1,0 +1,5 @@
+# Normalise line endings so the repo stays clean whether a file is committed
+# from Windows, Linux or a Mac. Without this, switching machines can show
+# every line of every file as changed.
+* text=auto
+*.py text eol=lf

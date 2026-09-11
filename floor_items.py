@@ -1,0 +1,645 @@
+"""
+floor_items.py
+==============
+
+The things that get drawn on the floor canvas: rooms, containers, and the
+handles you drag to resize or reshape a room.
+
+WHAT A QGraphicsItem IS
+-----------------------
+Qt has a scene/view system for canvases. A QGraphicsScene is a model of what
+exists -- shapes, their positions, their sizes -- and a QGraphicsView is a
+window looking at it. Panning and zooming happen in the view, so the scene
+never has to care about them, and none of the code below deals with scroll
+offsets or zoom levels. That is the main reason this app uses Qt rather than
+drawing everything by hand.
+
+Every shape in a scene is a QGraphicsItem. Qt gives you dragging, selection
+and hit-testing for free; you supply two things:
+
+    boundingRect()  - "everything I draw fits inside this rectangle"
+    paint()         - actually draw me
+
+COORDINATES
+-----------
+Each item has its own coordinate system, with (0, 0) at the item's own
+position. Children are positioned relative to their parent.
+
+That is doing a lot of quiet work here: containers are children of their room,
+so when you drag a room across the floor, its containers follow automatically.
+There is no code anywhere that moves containers when a room moves -- it simply
+cannot get out of step.
+
+THE TWO WAYS TO CHANGE A ROOM'S SHAPE
+-------------------------------------
+A selected room is in one of two edit modes, and they show different handles:
+
+    Resize     square handles around the outside. Dragging one stretches the
+               WHOLE room, keeping its shape -- an oval stays an oval, an L
+               keeps its notch. This is what you want nine times out of ten.
+
+    Edit shape round handles on every corner. Dragging one moves just that
+               corner. This is for fixing the outline itself.
+
+Splitting them up is deliberate. A circle is stored as a twenty-sided polygon,
+and twenty round handles all over it would be unusable -- but four corner
+handles to stretch it into an oval is exactly right.
+"""
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF,
+)
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsPolygonItem,
+    QGraphicsRectItem,
+)
+
+import theme
+
+# Flipped on by export.py while rendering a PDF. The room and container
+# labels are near-white so they read on the dark canvas; on paper that is
+# invisible, so print mode swaps them for a dark colour. One flag beats
+# threading a "printing" argument through every paint method.
+PRINT_MODE = False
+
+HANDLE_RADIUS = 5
+SCALE_HANDLE_SIZE = 9
+LABEL_MARGIN = 26        # extra room in boundingRect for text drawn above a shape
+MIN_ROOM_SIZE = 40       # a room can't be squashed smaller than this
+
+# The two edit modes described in the module docstring.
+EDIT_RESIZE = "resize"
+EDIT_VERTICES = "vertices"
+
+# The eight resize handles, by compass point. "nw" is the top-left corner,
+# "n" the middle of the top edge, and so on.
+SCALE_ROLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
+
+SCALE_CURSORS = {
+    "nw": Qt.SizeFDiagCursor, "se": Qt.SizeFDiagCursor,
+    "ne": Qt.SizeBDiagCursor, "sw": Qt.SizeBDiagCursor,
+    "n": Qt.SizeVerCursor, "s": Qt.SizeVerCursor,
+    "e": Qt.SizeHorCursor, "w": Qt.SizeHorCursor,
+}
+
+
+def snap(value):
+    """Round a coordinate to the nearest grid line.
+
+    This is what makes rooms line up with each other instead of sitting a
+    pixel or two off, the same way the Windows monitor arrangement screen
+    clicks displays into place.
+    """
+    grid = theme.GRID_SIZE
+    return round(value / grid) * grid
+
+
+def snap_point(point):
+    return QPointF(snap(point.x()), snap(point.y()))
+
+
+def canvas_font(size, bold=False):
+    font = QFont("Segoe UI")
+    font.setPixelSize(size)
+    font.setBold(bold)
+    return font
+
+
+def qcolor(hex_color, alpha=1.0):
+    """A QColor from one of our hex strings, optionally see-through."""
+    color = QColor(hex_color)
+    color.setAlphaF(alpha)
+    return color
+
+
+# ---------------------------------------------------------------------------
+# VERTEX HANDLE
+# ---------------------------------------------------------------------------
+
+class VertexHandle(QGraphicsEllipseItem):
+    """One draggable corner of a room polygon.
+
+    Handles are children of their room and appear only while that room is
+    selected and in "Edit shape" mode. Each one remembers which point in
+    room.points it represents, so dragging it edits that point and nothing
+    else.
+    """
+
+    def __init__(self, room_item, index):
+        super().__init__(-HANDLE_RADIUS, -HANDLE_RADIUS,
+                         HANDLE_RADIUS * 2, HANDLE_RADIUS * 2, room_item)
+        self.room_item = room_item
+        self.index = index
+
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setCursor(Qt.SizeAllCursor)
+        self.setZValue(10)          # always on top of the room and containers
+        self.setBrush(QBrush(QColor(theme.TEXT)))
+        self.setPen(QPen(qcolor(room_item.room.color), 2))
+
+        # Handles ignore the parent's dimming, so they stay visible and
+        # grabbable even when the rest of the floor is faded back.
+        self.setFlag(QGraphicsItem.ItemIgnoresParentOpacity, True)
+
+    def itemChange(self, change, value):
+        # Qt calls this whenever something about the item is about to change.
+        # Returning a different value for a position change is how you modify
+        # a drag while it is happening -- here, to snap it to the grid.
+        if change == QGraphicsItem.ItemPositionChange and self.scene():
+            snapped = snap_point(value)
+
+            # When the room repositions its own handles after a resize, it
+            # sets this flag first. Without it we would treat the room's own
+            # tidying-up as the user dragging, and the shape would slowly
+            # corrupt itself every time it was resized.
+            if not self.room_item.syncing:
+                self.room_item.move_vertex(self.index, snapped)
+
+            return snapped
+        return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.room_item.commit_geometry()
+
+
+# ---------------------------------------------------------------------------
+# SCALE HANDLE
+# ---------------------------------------------------------------------------
+
+class ScaleHandle(QGraphicsRectItem):
+    """One of the eight squares around a selected room, for resizing it.
+
+    Unlike the vertex handles, these are NOT movable items. Qt moving them
+    would fight with the room repositioning them as it resizes, so instead we
+    take the mouse events ourselves, tell the room what the new edge position
+    is, and let the room put every handle back where it belongs. One thing is
+    in charge, which is what keeps it predictable.
+    """
+
+    def __init__(self, room_item, role):
+        half = SCALE_HANDLE_SIZE / 2
+        super().__init__(-half, -half, SCALE_HANDLE_SIZE, SCALE_HANDLE_SIZE,
+                         room_item)
+        self.room_item = room_item
+        self.role = role
+
+        self.setZValue(11)
+        self.setCursor(SCALE_CURSORS[role])
+        self.setBrush(QBrush(QColor(theme.TEXT)))
+        self.setPen(QPen(qcolor(theme.ACCENT), 2))
+        self.setFlag(QGraphicsItem.ItemIgnoresParentOpacity, True)
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+
+    def mousePressEvent(self, event):
+        # Accepting the press is what claims the mouse for this item. Without
+        # it the click falls through to the room underneath and starts
+        # dragging the whole room instead.
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        # event.pos() is in the handle's own coordinates; mapToParent turns it
+        # into the room's, which is what the room's bounds are measured in.
+        point = snap_point(self.mapToParent(event.pos()))
+        self.room_item.drag_edge(self.role, point)
+
+    def mouseReleaseEvent(self, event):
+        event.accept()
+        self.room_item.commit_geometry()
+
+
+# ---------------------------------------------------------------------------
+# CONTAINER
+# ---------------------------------------------------------------------------
+
+class ContainerItem(QGraphicsRectItem):
+    """A drawer, cabinet or shelf, drawn inside its room.
+
+    Only draggable while its room is focused (double-clicked). That is what
+    stops you nudging a drawer out of place while you are trying to move the
+    whole room.
+    """
+
+    def __init__(self, container, room_item, profile):
+        super().__init__(0, 0, container.w, container.h, room_item)
+        self.container = container
+        self.room_item = room_item
+        self.profile = profile
+
+        self.setPos(container.x, container.y)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setZValue(2)
+        self.set_editable(False)
+
+        # Pulsed on and off by the view when you ask "where is this?" from the
+        # Items screen. Selection alone is too quiet to catch the eye on a
+        # busy floor.
+        self.highlighted = False
+
+    def set_editable(self, editable):
+        """Turn dragging on or off, and show the right mouse cursor."""
+        self.setFlag(QGraphicsItem.ItemIsMovable, editable)
+        self.setCursor(Qt.SizeAllCursor if editable else Qt.ArrowCursor)
+        self.setAcceptedMouseButtons(
+            Qt.LeftButton if editable else Qt.NoButton)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and self.scene():
+            point = snap_point(value)
+            # Keep the container inside its room's bounding box. Clamping to
+            # the box rather than the exact polygon is a deliberate
+            # simplification: it is predictable to use, and being able to nudge
+            # a drawer slightly into a corner notch is not worth the maths.
+            left, top, width, height = self.room_item.room.bounds()
+            max_x = left + width - self.container.w
+            max_y = top + height - self.container.h
+            point.setX(min(max(point.x(), left), max(left, max_x)))
+            point.setY(min(max(point.y(), top), max(top, max_y)))
+            return point
+        return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.container.x = self.pos().x()
+        self.container.y = self.pos().y()
+        self.room_item.editor.notify_changed()
+
+    def boundingRect(self):
+        return super().boundingRect().adjusted(-1, -1, 1, 1)
+
+    def paint(self, painter, option, widget=None):
+        """Draw the container: a soft filled rectangle with its name inside.
+
+        We never call the base class's paint(), so Qt's default dashed
+        selection box never appears -- selection is shown by drawing a
+        brighter border instead, which looks a great deal tidier.
+        """
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        color = self.container.color
+        focused = self.room_item.focused
+        selected = self.isSelected()
+
+        fill_alpha = 0.42 if focused else 0.26
+        if selected:
+            fill_alpha = 0.55
+
+        rect = QRectF(0, 0, self.container.w, self.container.h)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 5, 5)
+
+        painter.fillPath(path, QBrush(qcolor(color, fill_alpha)))
+
+        pen = QPen(qcolor(color, 1.0 if (selected or focused) else 0.75))
+        pen.setWidthF(2.0 if selected else 1.2)
+        if self.highlighted:
+            pen = QPen(QColor(theme.TEXT))
+            pen.setWidthF(3.5)
+        painter.setPen(pen)
+        painter.drawPath(path)
+
+        # Name, and how many items are inside, as one block centred in the
+        # box. Centring matters more than it sounds: a tall cupboard with its
+        # name pinned to the top and its count pinned to the bottom reads as
+        # two unrelated labels rather than one thing.
+        if self.container.w < 46 or self.container.h < 24:
+            return      # too small to label without it turning to mush
+
+        count = self.profile.item_count_in_container(self.container.id)
+        has_room_for_count = self.container.h >= 40
+
+        middle = rect.center().y()
+        text_left = rect.left() + 3
+        text_width = rect.width() - 6
+
+        if has_room_for_count:
+            name_rect = QRectF(text_left, middle - 15, text_width, 15)
+            count_rect = QRectF(text_left, middle + 1, text_width, 13)
+        else:
+            name_rect = QRectF(text_left, middle - 8, text_width, 16)
+            count_rect = None
+
+        painter.setFont(canvas_font(11, bold=True))
+        painter.setPen(QPen(qcolor(color, 1.0)))
+        painter.drawText(name_rect, Qt.AlignCenter, self.container.name)
+
+        if count_rect is not None:
+            painter.setFont(canvas_font(10))
+            muted = theme.BG_SIDEBAR if PRINT_MODE else theme.TEXT_MUTED
+            painter.setPen(QPen(qcolor(muted, 0.95)))
+            painter.drawText(count_rect, Qt.AlignCenter,
+                             f"{count} item" + ("" if count == 1 else "s"))
+
+
+# ---------------------------------------------------------------------------
+# ROOM
+# ---------------------------------------------------------------------------
+
+class RoomItem(QGraphicsPolygonItem):
+    """A room polygon, with its containers as children."""
+
+    def __init__(self, room, profile, editor):
+        super().__init__()
+        self.room = room
+        self.profile = profile
+        self.editor = editor          # the FloorView, so we can report changes
+        self.focused = False
+        self.dimmed = False
+        self.edit_mode = EDIT_RESIZE
+        self.syncing = False          # see VertexHandle.itemChange
+        self.handles = []
+        self.scale_handles = []
+        self.container_items = []
+
+        self.setPos(room.x, room.y)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setZValue(1)
+
+        self.rebuild()
+
+    # -- building -----------------------------------------------------------
+
+    def rebuild(self):
+        """Rebuild the polygon, the containers and the handles from the model.
+
+        Called after anything structural changes. Throwing the child items
+        away and remaking them is cheap at this scale, and it means the
+        picture can never disagree with the data.
+        """
+        self._apply_polygon()
+
+        for old in self.container_items:
+            if old.scene():
+                old.scene().removeItem(old)
+            old.setParentItem(None)
+        self.container_items = []
+
+        for container in self.room.containers:
+            self.container_items.append(
+                ContainerItem(container, self, self.profile))
+
+        self._rebuild_handles()
+        self.set_focused(self.focused)
+
+    def _apply_polygon(self):
+        self.setPolygon(QPolygonF([QPointF(x, y) for x, y in self.room.points]))
+
+    def _rebuild_handles(self):
+        for old in self.handles + self.scale_handles:
+            if old.scene():
+                old.scene().removeItem(old)
+            old.setParentItem(None)
+        self.handles = []
+        self.scale_handles = []
+
+        for index in range(len(self.room.points)):
+            self.handles.append(VertexHandle(self, index))
+
+        for role in SCALE_ROLES:
+            self.scale_handles.append(ScaleHandle(self, role))
+
+        self.sync_handles()
+
+    def sync_handles(self):
+        """Put every handle where the current shape says it should be.
+
+        `syncing` is raised while this runs so the vertex handles know these
+        moves are housekeeping, not the user dragging them.
+        """
+        self.syncing = True
+        try:
+            for handle in self.handles:
+                if handle.index < len(self.room.points):
+                    x, y = self.room.points[handle.index]
+                    handle.setPos(x, y)
+
+            left, top, width, height = self.room.bounds()
+            middle_x = left + width / 2
+            middle_y = top + height / 2
+            right = left + width
+            bottom = top + height
+
+            positions = {
+                "nw": (left, top), "n": (middle_x, top), "ne": (right, top),
+                "e": (right, middle_y), "se": (right, bottom),
+                "s": (middle_x, bottom), "sw": (left, bottom),
+                "w": (left, middle_y),
+            }
+            for handle in self.scale_handles:
+                handle.setPos(*positions[handle.role])
+        finally:
+            self.syncing = False
+
+        self._update_handle_visibility()
+
+    def _update_handle_visibility(self):
+        """Show the handles that match the current mode, and only those."""
+        active = self.isSelected() and not self.focused
+        for handle in self.handles:
+            handle.setVisible(active and self.edit_mode == EDIT_VERTICES)
+        for handle in self.scale_handles:
+            handle.setVisible(active and self.edit_mode == EDIT_RESIZE)
+
+    # -- state --------------------------------------------------------------
+
+    def set_edit_mode(self, mode):
+        self.edit_mode = mode
+        self._update_handle_visibility()
+
+    def set_focused(self, focused):
+        """Focused means "you are working inside this room".
+
+        Containers become draggable, the room itself locks in place so you
+        can't shove it by accident, and the handles hide to get out of the way.
+        """
+        self.focused = focused
+        self.setFlag(QGraphicsItem.ItemIsMovable, not focused)
+        for container_item in self.container_items:
+            container_item.set_editable(focused)
+        self._update_handle_visibility()
+        self.update()
+
+    def set_dimmed(self, dimmed):
+        """Fade this room back because another room is focused."""
+        self.dimmed = dimmed
+        self.setOpacity(0.28 if dimmed else 1.0)
+        self.update()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and self.scene():
+            return snap_point(value)
+
+        if change == QGraphicsItem.ItemSelectedChange:
+            # Qt has not applied the new value yet, so pass it in rather than
+            # asking isSelected(), which would still give the old answer.
+            active = bool(value) and not self.focused
+            for handle in self.handles:
+                handle.setVisible(active and self.edit_mode == EDIT_VERTICES)
+            for handle in self.scale_handles:
+                handle.setVisible(active and self.edit_mode == EDIT_RESIZE)
+
+        return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.commit_geometry()
+
+    # -- geometry editing ----------------------------------------------------
+
+    def move_vertex(self, index, point):
+        """A vertex handle was dragged: update that one polygon point."""
+        if index >= len(self.room.points):
+            return
+        self.room.points[index] = [point.x(), point.y()]
+        self._apply_polygon()
+        self.sync_handles()
+        self.update()
+
+    def drag_edge(self, role, point):
+        """A resize handle was dragged: move that edge and rescale the room.
+
+        Work out the new bounding box first, then hand it to the model, which
+        moves every point in proportion. Doing it in that order is what keeps
+        the shape intact -- we never touch individual points here.
+        """
+        left, top, width, height = self.room.bounds()
+        right = left + width
+        bottom = top + height
+
+        # Each compass letter in the role says which edge follows the mouse.
+        # The opposite edge stays put, which is what makes a corner handle
+        # pivot around the corner across from it.
+        if "w" in role:
+            left = min(point.x(), right - MIN_ROOM_SIZE)
+        if "e" in role:
+            right = max(point.x(), left + MIN_ROOM_SIZE)
+        if "n" in role:
+            top = min(point.y(), bottom - MIN_ROOM_SIZE)
+        if "s" in role:
+            bottom = max(point.y(), top + MIN_ROOM_SIZE)
+
+        self.resize_room(right - left, bottom - top, left, top)
+
+    def resize_room(self, width, height, left=None, top=None):
+        """Stretch the room to an exact size. Also used by the inspector."""
+        self.room.resize_to(max(width, MIN_ROOM_SIZE),
+                            max(height, MIN_ROOM_SIZE), left, top)
+        self._apply_polygon()
+        self._clamp_containers()
+        self.sync_handles()
+        self.update()
+
+    def _clamp_containers(self):
+        """Pull containers back inside after the room has shrunk.
+
+        Without this, squashing a room would leave its drawers hanging outside
+        the walls -- visible, still selectable, and clearly wrong.
+        """
+        left, top, width, height = self.room.bounds()
+        for container_item in self.container_items:
+            container = container_item.container
+            container.w = min(container.w, width)
+            container.h = min(container.h, height)
+            container.x = min(max(container.x, left), left + width - container.w)
+            container.y = min(max(container.y, top), top + height - container.h)
+            container_item.setRect(0, 0, container.w, container.h)
+            container_item.setPos(container.x, container.y)
+
+    def commit_geometry(self):
+        """Copy the item's live position back into the saved data, then tell
+        the editor so it can autosave."""
+        self.room.x = self.pos().x()
+        self.room.y = self.pos().y()
+        self.editor.notify_changed()
+
+    def add_container(self, container):
+        self.room.containers.append(container)
+        item = ContainerItem(container, self, self.profile)
+        item.set_editable(self.focused)
+        self.container_items.append(item)
+        self.editor.notify_changed()
+        return item
+
+    # -- drawing --------------------------------------------------------------
+
+    def boundingRect(self):
+        # Extra headroom above the shape for the name label, which is drawn
+        # outside the polygon itself, and a margin all round for the resize
+        # handles that sit on the edge. If boundingRect is too small, Qt clips
+        # them and leaves smears behind when the item moves.
+        margin = SCALE_HANDLE_SIZE
+        return super().boundingRect().adjusted(
+            -margin, -LABEL_MARGIN, margin, margin)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        color = self.room.color
+        selected = self.isSelected()
+
+        fill_alpha = 0.10
+        if selected:
+            fill_alpha = 0.18
+        if self.focused:
+            fill_alpha = 0.16
+
+        painter.setBrush(QBrush(qcolor(color, fill_alpha)))
+
+        pen = QPen(qcolor(color, 0.95))
+        pen.setWidthF(2.5 if (selected or self.focused) else 1.6)
+        pen.setJoinStyle(Qt.RoundJoin)
+        if self.focused:
+            pen.setStyle(Qt.SolidLine)
+            pen.setWidthF(3.0)
+        painter.setPen(pen)
+        painter.drawPolygon(self.polygon())
+
+        # While resizing, outline the bounding box faintly so it is obvious
+        # what the handles are moving.
+        if selected and not self.focused and self.edit_mode == EDIT_RESIZE:
+            left, top, width, height = self.room.bounds()
+            box_pen = QPen(qcolor(theme.ACCENT, 0.45))
+            box_pen.setWidthF(1.0)
+            box_pen.setStyle(Qt.DashLine)
+            painter.setPen(box_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(left, top, width, height))
+
+        self._paint_label(painter, color)
+
+    def _paint_label(self, painter, color):
+        """The room's name above it, with a summary line underneath.
+
+        Sitting the label just above the polygon rather than in the middle
+        keeps it clear of the containers, which is where the middle of a room
+        usually is once you have filled it in.
+        """
+        left, top, width, height = self.room.bounds()
+        if width <= 0:
+            return
+
+        name_rect = QRectF(left, top - LABEL_MARGIN + 2, width, 15)
+        painter.setFont(canvas_font(12, bold=True))
+        ink = theme.BG_APP if PRINT_MODE else theme.TEXT
+        painter.setPen(QPen(qcolor(ink, 0.95)))
+        painter.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
+                         self.room.name)
+
+        # Only worth showing the counts when there is enough width for them
+        # not to collide with the name.
+        if width < 90:
+            return
+
+        container_count = len(self.room.containers)
+        item_count = len(self.profile.items_in_room(self.room))
+        summary = f"{container_count}c · {item_count}i"
+
+        painter.setFont(canvas_font(10))
+        painter.setPen(QPen(qcolor(color, 0.85)))
+        painter.drawText(name_rect, Qt.AlignRight | Qt.AlignVCenter, summary)

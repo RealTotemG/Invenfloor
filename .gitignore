@@ -1,0 +1,27 @@
+# Your actual inventory: the rooms of your home and what's in your drawers.
+# That is personal data, not code, and on a public repo anyone could read it.
+data/
+*.json.tmp
+
+# Python bytecode and virtual environments. Rebuildable, machine-specific.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# PyInstaller output. Rebuildable, and often hundreds of megabytes.
+build/
+dist/
+*.spec
+
+# Editor and OS clutter.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Delivered zips and exports, not source.
+Claude outputs/
+*.zip

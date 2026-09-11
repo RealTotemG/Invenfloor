@@ -1,0 +1,442 @@
+"""
+inspector.py
+============
+
+The panel down the right-hand side of the layout screen. It shows whatever is
+currently selected on the canvas -- a room, or a container -- and lets you
+rename it, recolour it, resize it, tag it, and see what is inside it.
+
+It follows one rule: the inspector never reaches into the canvas. It edits the
+data or announces what it wants, and the layout screen does the rest. So the
+panel has no idea the canvas exists, and you could put it somewhere else
+entirely without touching this file.
+"""
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QScrollArea, QFrame, QLabel,
+    QSpinBox, QButtonGroup,
+)
+
+import theme
+from floor_items import EDIT_RESIZE, EDIT_VERTICES
+from models import Container, Item, Room
+from widgets import (
+    ColorPicker, ItemDialog, TagChipRow, TagPickerDialog, button, confirm,
+    divider, empty_state, label,
+)
+
+PANEL_WIDTH = 320
+
+
+class Inspector(QWidget):
+    """Shows and edits the current canvas selection."""
+
+    dataChanged = Signal()
+    focusRoomRequested = Signal(object)
+    deletedRoom = Signal(object)
+    deletedContainer = Signal(object)
+    resizeRoomRequested = Signal(object, float, float)   # room, width, height
+    editModeChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("inspector")
+        self.setFixedWidth(PANEL_WIDTH)
+        self.profile = None
+        self.selection = None
+        self.edit_mode = EDIT_RESIZE
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        outer.addWidget(self._scroll, 1)
+
+        self.show_selection(None)
+
+    def set_profile(self, profile):
+        self.profile = profile
+        self.show_selection(None)
+
+    # -- the top-level switch ------------------------------------------------
+
+    def show_selection(self, selection):
+        """Rebuild the panel for whatever is now selected.
+
+        Rebuilding from scratch rather than updating individual fields means
+        the panel can never show a stale name or the wrong colour.
+        """
+        self.selection = selection
+
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_LG,
+                                  theme.SPACE_LG, theme.SPACE_LG)
+        layout.setSpacing(theme.SPACE_MD)
+
+        if isinstance(selection, Room):
+            self._build_room(layout, selection)
+        elif isinstance(selection, Container):
+            self._build_container(layout, selection)
+        else:
+            self._build_empty(layout)
+
+        layout.addStretch()
+        self._scroll.setWidget(body)
+
+    # -- nothing selected -----------------------------------------------------
+
+    def _build_empty(self, layout):
+        layout.addWidget(label("Inspector", "sectionTitle"))
+        layout.addWidget(divider())
+        layout.addSpacing(theme.SPACE_LG)
+        layout.addWidget(empty_state(
+            "Nothing selected",
+            "Click a room or a container on the floor to edit it here."))
+        layout.addSpacing(theme.SPACE_XL)
+
+        tips = QLabel(
+            "<b>Shape</b> &nbsp;pick a preset and drag it out, or click once "
+            "for a default size<br><br>"
+            "<b>Draw room</b> &nbsp;click each corner, then the first corner "
+            "again to close<br><br>"
+            "<b>Resize</b> &nbsp;select a room and drag the square handles "
+            "around it<br><br>"
+            "<b>Add container</b> &nbsp;drag a box inside a room<br><br>"
+            "<b>Double-click</b> a room to work inside it<br><br>"
+            "<b>Scroll</b> to zoom, <b>middle-drag</b> to pan<br><br>"
+            "<b>Delete</b> removes the selected thing")
+        tips.setWordWrap(True)
+        tips.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(tips)
+
+    # -- shared building blocks -------------------------------------------------
+
+    def _name_and_color(self, layout, kind, subject):
+        """The name box and colour picker, identical for rooms and containers."""
+        layout.addWidget(label(kind.upper(), "hint"))
+
+        name_field = QLineEdit(subject.name)
+        name_field.setPlaceholderText("Name")
+
+        def rename(text):
+            subject.name = text
+            self.dataChanged.emit()
+
+        # textEdited fires only for typing, not when we set the text in code,
+        # so this can never loop back on itself.
+        name_field.textEdited.connect(rename)
+        layout.addWidget(name_field)
+
+        layout.addSpacing(theme.SPACE_XS)
+        layout.addWidget(label("Colour", "caption"))
+        picker = ColorPicker(subject.color)
+
+        def recolor(color):
+            subject.color = color
+            self.dataChanged.emit()
+
+        picker.colorChanged.connect(recolor)
+        layout.addWidget(picker)
+
+    def _tags_block(self, layout, subject, subject_name):
+        layout.addSpacing(theme.SPACE_SM)
+        layout.addWidget(label("Tags", "caption"))
+
+        chips = TagChipRow("No tags")
+        chips.set_tags(self.profile.tags_for(subject.tag_ids))
+        layout.addWidget(chips)
+
+        def edit_tags():
+            dialog = TagPickerDialog(self, self.profile, subject.tag_ids,
+                                     subject_name)
+            if dialog.exec():
+                subject.tag_ids = dialog.selected_ids()
+                chips.set_tags(self.profile.tags_for(subject.tag_ids))
+                self.dataChanged.emit()
+
+        layout.addWidget(button("Edit tags", "ghost", edit_tags, size="sm"))
+
+    def _mini_row(self, color, title, subtitle, badge=None, on_click=None):
+        """A compact coloured row used for the contents lists."""
+        row = QFrame()
+        row.setObjectName("card")
+        row.setStyleSheet(f"""
+            QFrame#card {{
+                background-color: {theme.BG_CARD};
+                border: 1px solid {theme.BORDER};
+                border-radius: {theme.RADIUS_MD}px;
+            }}
+        """)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(theme.SPACE_SM, theme.SPACE_SM,
+                                      theme.SPACE_SM, theme.SPACE_SM)
+        row_layout.setSpacing(theme.SPACE_SM)
+
+        dot = QFrame()
+        dot.setFixedSize(8, 8)
+        dot.setStyleSheet(
+            f"background-color: {color}; border-radius: 4px;")
+        row_layout.addWidget(dot)
+
+        text_column = QVBoxLayout()
+        text_column.setSpacing(1)
+        name = QLabel(title)
+        name.setStyleSheet(f"color: {theme.TEXT};")
+        text_column.addWidget(name)
+        if subtitle:
+            sub = QLabel(subtitle)
+            sub.setWordWrap(True)
+            sub.setStyleSheet(
+                f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
+            text_column.addWidget(sub)
+        row_layout.addLayout(text_column, 1)
+
+        if badge:
+            count = QLabel(badge)
+            count.setStyleSheet(
+                f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
+            row_layout.addWidget(count)
+
+        if on_click is not None:
+            row_layout.addWidget(button("Edit", "ghost", on_click, size="sm"))
+
+        return row
+
+    # -- room -------------------------------------------------------------------
+
+    def _build_room(self, layout, room):
+        self._name_and_color(layout, "Room", room)
+
+        layout.addSpacing(theme.SPACE_SM)
+        self._size_block(layout, room)
+        self._shape_mode_block(layout)
+
+        self._tags_block(layout, room, "room")
+
+        layout.addSpacing(theme.SPACE_SM)
+        layout.addWidget(divider())
+        layout.addSpacing(theme.SPACE_XS)
+
+        containers = room.containers
+        layout.addWidget(label(f"Containers ({len(containers)})", "caption"))
+
+        if not containers:
+            hint = QLabel(
+                "None yet. Pick <b>Add container</b> in the toolbar and drag a "
+                "box inside this room.")
+            hint.setWordWrap(True)
+            hint.setStyleSheet(
+                f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+            layout.addWidget(hint)
+        else:
+            for container in containers:
+                count = self.profile.item_count_in_container(container.id)
+                layout.addWidget(self._mini_row(
+                    container.color, container.name,
+                    f"{count} item" + ("" if count == 1 else "s")))
+
+        layout.addSpacing(theme.SPACE_XS)
+        layout.addWidget(button(
+            "Work inside this room", "ghost",
+            lambda: self.focusRoomRequested.emit(room),
+            "Same as double-clicking it: dims the other rooms and lets you "
+            "drag containers around", size="sm"))
+
+        layout.addSpacing(theme.SPACE_MD)
+        layout.addWidget(divider())
+        layout.addSpacing(theme.SPACE_XS)
+
+        total_items = len(self.profile.items_in_room(room))
+        layout.addWidget(label(
+            f"{total_items} item" + ("" if total_items == 1 else "s") +
+            " across this room", "caption"))
+
+        layout.addSpacing(theme.SPACE_SM)
+
+        def delete_room():
+            if not confirm(
+                self, "Delete room",
+                f"Delete '{room.name}'?\n\nIts containers go too. Items kept "
+                f"there lose that location, but stay in your catalogue."
+            ):
+                return
+            self.deletedRoom.emit(room)
+
+        layout.addWidget(button("Delete room", "danger", delete_room))
+
+    def _size_block(self, layout, room):
+        """Exact width and height boxes.
+
+        The handles on the canvas are quicker, but if you know a room is four
+        metres across you want to type it, not nudge it.
+        """
+        _, _, width, height = room.bounds()
+
+        layout.addWidget(label("Size", "caption"))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.SPACE_SM)
+
+        width_field = QSpinBox()
+        height_field = QSpinBox()
+
+        for field, value in ((width_field, width), (height_field, height)):
+            field.setRange(40, 4000)
+            field.setSingleStep(theme.GRID_SIZE)
+            # Set the starting value with signals off, or simply building the
+            # panel would look like the user asking for a resize.
+            field.blockSignals(True)
+            field.setValue(int(round(value)))
+            field.blockSignals(False)
+
+        def apply_size():
+            self.resizeRoomRequested.emit(
+                room, float(width_field.value()), float(height_field.value()))
+
+        width_field.valueChanged.connect(apply_size)
+        height_field.valueChanged.connect(apply_size)
+
+        width_label = QLabel("W")
+        width_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
+        height_label = QLabel("H")
+        height_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
+
+        row.addWidget(width_label)
+        row.addWidget(width_field, 1)
+        row.addWidget(height_label)
+        row.addWidget(height_field, 1)
+        layout.addLayout(row)
+
+    def _shape_mode_block(self, layout):
+        """The Resize / Edit shape switch.
+
+        Two buttons rather than a checkbox because it is a choice between two
+        named things, not something you turn on.
+        """
+        layout.addSpacing(theme.SPACE_XS)
+        layout.addWidget(label("Handles", "caption"))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.SPACE_XS)
+
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+
+        resize_button = button("Resize", "ghost", size="sm",
+                               tooltip="Drag the squares to stretch the whole "
+                                       "room, keeping its shape")
+        shape_button = button("Edit shape", "ghost", size="sm",
+                              tooltip="Drag the round handles to move "
+                                      "individual corners")
+
+        for candidate, mode in ((resize_button, EDIT_RESIZE),
+                                (shape_button, EDIT_VERTICES)):
+            candidate.setCheckable(True)
+            group.addButton(candidate)
+            candidate.clicked.connect(
+                lambda checked=False, m=mode: self._set_edit_mode(m))
+            row.addWidget(candidate)
+
+        resize_button.setChecked(self.edit_mode == EDIT_RESIZE)
+        shape_button.setChecked(self.edit_mode == EDIT_VERTICES)
+
+        row.addStretch()
+        layout.addLayout(row)
+
+    def _set_edit_mode(self, mode):
+        self.edit_mode = mode
+        self.editModeChanged.emit(mode)
+
+    # -- container ----------------------------------------------------------------
+
+    def _build_container(self, layout, container):
+        floor, room, _ = self.profile.find_container(container.id)
+
+        self._name_and_color(layout, "Container", container)
+
+        if room is not None:
+            layout.addWidget(label(f"in {floor.name} / {room.name}", "hint"))
+
+        self._tags_block(layout, container, "container")
+
+        layout.addSpacing(theme.SPACE_SM)
+        layout.addWidget(divider())
+        layout.addSpacing(theme.SPACE_XS)
+
+        contents = self.profile.contents_of(container.id)
+        layout.addWidget(label(f"Items ({len(contents)})", "caption"))
+
+        if not contents:
+            hint = QLabel("Nothing in here yet.")
+            hint.setStyleSheet(
+                f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+            layout.addWidget(hint)
+        else:
+            for item, quantity in contents:
+                # If the item is also kept elsewhere, say so -- otherwise the
+                # quantity here looks like the total and it is easy to think
+                # you own fewer than you do.
+                elsewhere = len(self.profile.locations_of(item)) - 1
+                subtitle = ""
+                if elsewhere > 0:
+                    subtitle = (f"also in {elsewhere} other place"
+                                + ("" if elsewhere == 1 else "s")
+                                + f" · {item.total_quantity()} in total")
+
+                layout.addWidget(self._mini_row(
+                    item.color, item.name, subtitle,
+                    badge=f"×{quantity}",
+                    on_click=lambda checked=False, i=item: self._edit_item(i)))
+
+        layout.addSpacing(theme.SPACE_XS)
+        layout.addWidget(button(
+            "+ Add item here", "primary",
+            lambda: self._add_item(container)))
+
+        layout.addSpacing(theme.SPACE_MD)
+        layout.addWidget(divider())
+        layout.addSpacing(theme.SPACE_XS)
+
+        def delete_container():
+            if not confirm(
+                self, "Delete container",
+                f"Delete '{container.name}'?\n\nThe {len(contents)} item"
+                f"{'' if len(contents) == 1 else 's'} kept here stay in your "
+                f"catalogue -- they just lose this location."
+            ):
+                return
+            self.deletedContainer.emit(container)
+
+        layout.addWidget(button("Delete container", "danger", delete_container))
+
+    # -- item editing --------------------------------------------------------------
+
+    def _add_item(self, container):
+        dialog = ItemDialog(self, self.profile, default_container_id=container.id)
+        if not dialog.exec():
+            return
+        values = dialog.result_values()
+        if not values["name"]:
+            return
+
+        self.profile.items.append(Item(**values))
+        self.dataChanged.emit()
+        self.show_selection(self.selection)     # redraw the contents list
+
+    def _edit_item(self, item):
+        dialog = ItemDialog(self, self.profile, item=item)
+        if not dialog.exec():
+            return
+        values = dialog.result_values()
+        if not values["name"]:
+            return
+
+        for key, value in values.items():
+            setattr(item, key, value)
+        self.dataChanged.emit()
+        self.show_selection(self.selection)
