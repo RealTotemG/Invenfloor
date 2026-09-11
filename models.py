@@ -40,7 +40,7 @@ does not have a single location and a single quantity. It has a list:
     ])
 
 There is still exactly ONE "Towels" item in the catalogue -- one name, one
-colour, one set of tags -- and its 14 towels are split across two places. That
+color, one set of tags -- and its 14 towels are split across two places. That
 is the thing worth getting right: duplicating the item would mean renaming or
 retagging it twice and having the two copies drift apart.
 
@@ -291,6 +291,28 @@ class Container:
         )
 
 
+def closest_point_on_segment(ax, ay, bx, by, px, py):
+    """The point on the line segment A-B nearest to P, and how far away it is.
+
+    Used to work out which wall you clicked on when adding a corner. The maths
+    is a projection: how far along A-B does P land, clamped to the ends so the
+    answer is always somewhere on the actual segment rather than out on the
+    infinite line it sits on.
+    """
+    dx = bx - ax
+    dy = by - ay
+
+    if dx == 0 and dy == 0:
+        return ax, ay, math.hypot(px - ax, py - ay)
+
+    along = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    along = max(0.0, min(1.0, along))       # clamp to the segment
+
+    cx = ax + along * dx
+    cy = ay + along * dy
+    return cx, cy, math.hypot(px - cx, py - cy)
+
+
 # ---------------------------------------------------------------------------
 # ROOM
 # ---------------------------------------------------------------------------
@@ -351,6 +373,47 @@ class Room:
         xs = [p[0] for p in self.points]
         ys = [p[1] for p in self.points]
         return (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+
+    def insert_point_on_nearest_edge(self, x, y):
+        """Add a corner on whichever edge is closest to (x, y).
+
+        The new corner is placed ON the edge rather than at the exact spot you
+        clicked, so the outline does not change shape the instant you add it.
+        You add a corner, then drag it where you want. Dropping it at the raw
+        click point would put a dent in the wall before you had asked for one.
+
+        Returns the index of the new point, so the caller can select it.
+        """
+        if len(self.points) < 2:
+            return None
+
+        best_index = 0
+        best_distance = None
+        best_point = None
+        count = len(self.points)
+
+        for index in range(count):
+            ax, ay = self.points[index]
+            bx, by = self.points[(index + 1) % count]
+            cx, cy, distance = closest_point_on_segment(ax, ay, bx, by, x, y)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_index = index
+                best_point = (cx, cy)
+
+        self.points.insert(best_index + 1, [best_point[0], best_point[1]])
+        return best_index + 1
+
+    def remove_point(self, index):
+        """Delete one corner. Refuses below three, which is the minimum that
+        still encloses an area."""
+        if len(self.points) <= 3:
+            return False
+        if not (0 <= index < len(self.points)):
+            return False
+
+        del self.points[index]
+        return True
 
     def resize_to(self, new_width, new_height, anchor_left=None, anchor_top=None):
         """Stretch the whole room to a new width and height.

@@ -4,7 +4,7 @@ inspector.py
 
 The panel down the right-hand side of the layout screen. It shows whatever is
 currently selected on the canvas -- a room, or a container -- and lets you
-rename it, recolour it, resize it, tag it, and see what is inside it.
+rename it, recolor it, resize it, tag it, and see what is inside it.
 
 It follows one rule: the inspector never reaches into the canvas. It edits the
 data or announces what it wants, and the layout screen does the rest. So the
@@ -23,7 +23,7 @@ from floor_items import EDIT_RESIZE, EDIT_VERTICES
 from models import Container, Item, Room
 from widgets import (
     ColorPicker, ItemDialog, TagChipRow, TagPickerDialog, button, confirm,
-    divider, empty_state, label,
+    divider, empty_state, label, wrapped,
 )
 
 PANEL_WIDTH = 320
@@ -46,6 +46,9 @@ class Inspector(QWidget):
         self.profile = None
         self.selection = None
         self.edit_mode = EDIT_RESIZE
+        # Which room the canvas is currently focused on, if any. The inspector
+        # has no way to find this out for itself, so the layout screen tells it.
+        self.focused_room_id = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -59,7 +62,27 @@ class Inspector(QWidget):
 
     def set_profile(self, profile):
         self.profile = profile
+        self.focused_room_id = None
         self.show_selection(None)
+
+    def set_focused_room(self, room):
+        """Told by the layout screen when the canvas focuses or unfocuses.
+
+        Only rebuilds when the change actually affects what is on screen,
+        which avoids throwing away the panel every time you click around.
+        """
+        new_id = room.id if room is not None else None
+        if new_id == self.focused_room_id:
+            return
+
+        self.focused_room_id = new_id
+
+        if isinstance(self.selection, Room):
+            self.show_selection(self.selection)
+
+    def add_item_to(self, container):
+        """Public entry point for the canvas's right-click "Add item here"."""
+        self._add_item(container)
 
     # -- the top-level switch ------------------------------------------------
 
@@ -67,7 +90,7 @@ class Inspector(QWidget):
         """Rebuild the panel for whatever is now selected.
 
         Rebuilding from scratch rather than updating individual fields means
-        the panel can never show a stale name or the wrong colour.
+        the panel can never show a stale name or the wrong color.
         """
         self.selection = selection
 
@@ -109,7 +132,7 @@ class Inspector(QWidget):
             "<b>Double-click</b> a room to work inside it<br><br>"
             "<b>Scroll</b> to zoom, <b>middle-drag</b> to pan<br><br>"
             "<b>Delete</b> removes the selected thing")
-        tips.setWordWrap(True)
+        wrapped(tips)
         tips.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(tips)
@@ -117,7 +140,7 @@ class Inspector(QWidget):
     # -- shared building blocks -------------------------------------------------
 
     def _name_and_color(self, layout, kind, subject):
-        """The name box and colour picker, identical for rooms and containers."""
+        """The name box and color picker, identical for rooms and containers."""
         layout.addWidget(label(kind.upper(), "hint"))
 
         name_field = QLineEdit(subject.name)
@@ -133,7 +156,7 @@ class Inspector(QWidget):
         layout.addWidget(name_field)
 
         layout.addSpacing(theme.SPACE_XS)
-        layout.addWidget(label("Colour", "caption"))
+        layout.addWidget(label("Color", "caption"))
         picker = ColorPicker(subject.color)
 
         def recolor(color):
@@ -162,7 +185,7 @@ class Inspector(QWidget):
         layout.addWidget(button("Edit tags", "ghost", edit_tags, size="sm"))
 
     def _mini_row(self, color, title, subtitle, badge=None, on_click=None):
-        """A compact coloured row used for the contents lists."""
+        """A compact colored row used for the contents lists."""
         row = QFrame()
         row.setObjectName("card")
         row.setStyleSheet(f"""
@@ -190,7 +213,7 @@ class Inspector(QWidget):
         text_column.addWidget(name)
         if subtitle:
             sub = QLabel(subtitle)
-            sub.setWordWrap(True)
+            wrapped(sub)
             sub.setStyleSheet(
                 f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
             text_column.addWidget(sub)
@@ -229,7 +252,7 @@ class Inspector(QWidget):
             hint = QLabel(
                 "None yet. Pick <b>Add container</b> in the toolbar and drag a "
                 "box inside this room.")
-            hint.setWordWrap(True)
+            wrapped(hint)
             hint.setStyleSheet(
                 f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
             layout.addWidget(hint)
@@ -241,11 +264,7 @@ class Inspector(QWidget):
                     f"{count} item" + ("" if count == 1 else "s")))
 
         layout.addSpacing(theme.SPACE_XS)
-        layout.addWidget(button(
-            "Work inside this room", "ghost",
-            lambda: self.focusRoomRequested.emit(room),
-            "Same as double-clicking it: dims the other rooms and lets you "
-            "drag containers around", size="sm"))
+        layout.addWidget(self._focus_button(room))
 
         layout.addSpacing(theme.SPACE_MD)
         layout.addWidget(divider())
@@ -268,6 +287,28 @@ class Inspector(QWidget):
             self.deletedRoom.emit(room)
 
         layout.addWidget(button("Delete room", "danger", delete_room))
+
+    def _focus_button(self, room):
+        """Either an invitation to go into the room, or a statement that you
+        are already in it.
+
+        A button you can still press when it would do nothing is a small lie
+        about what is going on, so while this room is focused it says so and
+        stops being clickable.
+        """
+        if self.focused_room_id == room.id:
+            here = button("Currently working in this room", "ghost",
+                          size="sm")
+            here.setEnabled(False)
+            here.setToolTip("Press Escape, or double-click the room, to step "
+                            "back out")
+            return here
+
+        return button(
+            "Work inside this room", "ghost",
+            lambda: self.focusRoomRequested.emit(room),
+            "Same as double-clicking it: dims the other rooms and lets you "
+            "drag containers around", size="sm")
 
     def _size_block(self, layout, room):
         """Exact width and height boxes.
@@ -348,8 +389,23 @@ class Inspector(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
-    def _set_edit_mode(self, mode):
+    def set_edit_mode(self, mode):
+        """Told by the canvas which handles rooms are showing.
+
+        The canvas is the single source of truth for this. Keeping a second
+        copy here and hoping the two stayed in step is exactly how the
+        buttons ended up showing a mode the canvas was not in.
+        """
+        if mode == self.edit_mode:
+            return
+
         self.edit_mode = mode
+        if isinstance(self.selection, Room):
+            self.show_selection(self.selection)
+
+    def _set_edit_mode(self, mode):
+        # Announce it and let the canvas decide; it will tell us back through
+        # set_edit_mode above, so there is only ever one place that decides.
         self.editModeChanged.emit(mode)
 
     # -- container ----------------------------------------------------------------

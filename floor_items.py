@@ -59,7 +59,7 @@ import theme
 
 # Flipped on by export.py while rendering a PDF. The room and container
 # labels are near-white so they read on the dark canvas; on paper that is
-# invisible, so print mode swaps them for a dark colour. One flag beats
+# invisible, so print mode swaps them for a dark color. One flag beats
 # threading a "printing" argument through every paint method.
 PRINT_MODE = False
 
@@ -385,7 +385,7 @@ class RoomItem(QGraphicsPolygonItem):
                 ContainerItem(container, self, self.profile))
 
         self._rebuild_handles()
-        self.set_focused(self.focused)
+        self.set_focused(self.focused)      # also settles movability
 
     def _apply_polygon(self):
         self.setPolygon(QPolygonF([QPointF(x, y) for x, y in self.room.points]))
@@ -450,6 +450,7 @@ class RoomItem(QGraphicsPolygonItem):
 
     def set_edit_mode(self, mode):
         self.edit_mode = mode
+        self._update_movable()
         self._update_handle_visibility()
 
     def set_focused(self, focused):
@@ -459,11 +460,29 @@ class RoomItem(QGraphicsPolygonItem):
         can't shove it by accident, and the handles hide to get out of the way.
         """
         self.focused = focused
-        self.setFlag(QGraphicsItem.ItemIsMovable, not focused)
         for container_item in self.container_items:
             container_item.set_editable(focused)
+        self._update_movable()
         self._update_handle_visibility()
         self.update()
+
+    def _update_movable(self):
+        """Decide in ONE place whether this room can be dragged around.
+
+        Two separate things want the room held still, and having them both
+        call setFlag independently is how you get a room that is stuck because
+        one of them said no and the other never said yes again:
+
+          - while it is focused, so you don't shove it while arranging drawers
+          - while editing its outline, because then a drag on the body means
+            "I am working on this shape", not "move this somewhere else"
+
+        That second one is what makes Edit shape a real mode rather than a
+        different set of dots.
+        """
+        can_move = (not self.focused) and self.edit_mode == EDIT_RESIZE
+        self.setFlag(QGraphicsItem.ItemIsMovable, can_move)
+        self.setCursor(Qt.OpenHandCursor if can_move else Qt.ArrowCursor)
 
     def set_dimmed(self, dimmed):
         """Fade this room back because another room is focused."""
@@ -500,6 +519,39 @@ class RoomItem(QGraphicsPolygonItem):
         self._apply_polygon()
         self.sync_handles()
         self.update()
+
+    def add_vertex_near(self, local_point):
+        """Put a new corner on whichever wall is nearest the given point.
+
+        Comes from double-clicking an edge while in Edit shape mode. The
+        handles have to be rebuilt rather than nudged, because every handle
+        after the insertion point now represents a different corner.
+        """
+        index = self.room.insert_point_on_nearest_edge(
+            local_point.x(), local_point.y())
+        if index is None:
+            return None
+
+        # Snap the new corner to the grid so it lines up with everything else.
+        x, y = self.room.points[index]
+        self.room.points[index] = [snap(x), snap(y)]
+
+        self._apply_polygon()
+        self._rebuild_handles()
+        self.update()
+        self.editor.notify_changed()
+        return index
+
+    def remove_vertex(self, index):
+        """Delete one corner. Refuses to go below three."""
+        if not self.room.remove_point(index):
+            return False
+
+        self._apply_polygon()
+        self._rebuild_handles()
+        self.update()
+        self.editor.notify_changed()
+        return True
 
     def drag_edge(self, role, point):
         """A resize handle was dragged: move that edge and rescale the room.

@@ -2,17 +2,17 @@
 theme.py
 ========
 
-Every colour, size and font in the app is defined in this one file.
+Every color, size and font in the app is defined in this one file.
 
 This is the "customizable" knob you asked for. If you want the whole app to
-look different, you change values here and nothing else. No colour codes are
+look different, you change values here and nothing else. No color codes are
 written anywhere else in the project -- if you ever find one, it belongs here
 instead.
 
 Two things live in this file:
 
 1. Plain constants (BG_APP, TEXT, ACCENT ...) used by the code that draws the
-   floor canvas, because that is drawn by hand and needs the raw colours.
+   floor canvas, because that is drawn by hand and needs the raw colors.
 
 2. stylesheet(), which returns a big string of QSS. QSS is Qt's version of
    CSS -- same idea, same syntax. Qt applies it to every widget in the app at
@@ -41,7 +41,7 @@ TEXT = "#e8ebf2"          # normal text
 TEXT_MUTED = "#98a1b5"    # secondary text, captions
 TEXT_FAINT = "#5d677d"    # hints, placeholders, disabled
 
-ACCENT = "#4f7cff"        # the single "primary" colour of the app
+ACCENT = "#4f7cff"        # the single "primary" color of the app
 ACCENT_HOVER = "#6b91ff"
 ACCENT_SOFT = "#1e2a4d"   # accent at low intensity, for selected backgrounds
 
@@ -60,7 +60,7 @@ CANVAS_ORIGIN = "#2a3346"  # the x=0 / y=0 axis lines
 # ---------------------------------------------------------------------------
 # SWATCHES
 # ---------------------------------------------------------------------------
-# The colours offered whenever you colour-code something: a profile, floor,
+# The colors offered whenever you color-code something: a profile, floor,
 # room, container, item or tag. Twelve fits a tidy 6x2 grid in the picker.
 # Add or remove entries freely -- the picker just draws whatever is in here.
 SWATCHES = [
@@ -114,7 +114,7 @@ def with_alpha(hex_color, alpha):
     """Turn "#4f7cff" into "rgba(79, 124, 255, 0.25)".
 
     Qt understands rgba() in stylesheets, and the canvas code uses the same
-    idea to draw a room's fill as a faded version of its label colour.
+    idea to draw a room's fill as a faded version of its label color.
 
     `alpha` is 0.0 (invisible) to 1.0 (solid).
     """
@@ -126,10 +126,10 @@ def with_alpha(hex_color, alpha):
 
 
 def mix(hex_color, other_hex, amount):
-    """Blend two colours. `amount` 0.0 gives the first, 1.0 gives the second.
+    """Blend two colors. `amount` 0.0 gives the first, 1.0 gives the second.
 
-    Used for things like "this colour, but 30% darker" without having to
-    hand-pick a second colour for every swatch.
+    Used for things like "this color, but 30% darker" without having to
+    hand-pick a second color for every swatch.
     """
     first = hex_color.lstrip("#")
     second = other_hex.lstrip("#")
@@ -170,7 +170,7 @@ def stylesheet():
 
     That last one is worth knowing. In the Python code we write
     `button.setProperty("kind", "danger")` and the delete-red styling below
-    attaches itself automatically. It keeps colour decisions in this file
+    attaches itself automatically. It keeps color decisions in this file
     instead of scattering them through the screens.
     """
     return f"""

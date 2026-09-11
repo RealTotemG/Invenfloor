@@ -2,17 +2,17 @@
 widgets.py
 ==========
 
-Small user-interface pieces that more than one screen needs: the colour
-picker, the tag chips, the little "name and colour" dialog, and so on.
+Small user-interface pieces that more than one screen needs: the color
+picker, the tag chips, the little "name and color" dialog, and so on.
 
 Anything that appears on two different screens belongs in here. That is the
 whole rule. It keeps the screen files about layout and behaviour rather than
-about re-inventing a colour picker three times.
+about re-inventing a color picker three times.
 
 A NOTE ON SIGNALS
 -----------------
 Qt widgets talk to each other with signals. A widget announces that something
-happened ("my colour changed") and anyone interested connects a function to
+happened ("my color changed") and anyone interested connects a function to
 that announcement:
 
     picker.colorChanged.connect(my_function)
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QDialog, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLineEdit, QMessageBox, QLayout, QCheckBox,
     QScrollArea, QFrame, QSpinBox, QPlainTextEdit, QComboBox, QSizePolicy,
-    QListWidget,
+    QListWidget, QAbstractItemView,
 )
 
 import theme
@@ -45,7 +45,7 @@ def button(text, kind=None, on_click=None, tooltip=None, size=None):
 
     `kind` is "primary", "danger", "ghost" or None. `size` is "sm", "icon" or
     None. Both set Qt properties that the stylesheet in theme.py watches for,
-    so the actual colours and paddings stay in the theme file rather than
+    so the actual colors and paddings stay in the theme file rather than
     being written here.
 
     Note what is NOT here: setFixedHeight. Forcing a height smaller than the
@@ -73,6 +73,27 @@ def label(text, style=None):
     if style:
         result.setObjectName(style)
     return result
+
+
+def wrapped(text_label):
+    """Make a label wrap its text AND actually get the height to do it.
+
+    setWordWrap(True) on its own is not enough, and this is a genuinely nasty
+    trap. A layout only asks a widget "how tall are you at this width?" if the
+    widget's size POLICY says it has an answer, and QLabel does not set that
+    flag for you. So the layout reserves one line, the text wraps onto two, and
+    the second line gets drawn outside the space reserved for it.
+
+    On screen that looks like text being cut in half or overlapping whatever
+    sits underneath, which sends you hunting for a font or styling problem when
+    the real cause is three lines away in a layout.
+    """
+    text_label.setWordWrap(True)
+    policy = text_label.sizePolicy()
+    policy.setHeightForWidth(True)
+    policy.setVerticalPolicy(QSizePolicy.MinimumExpanding)
+    text_label.setSizePolicy(policy)
+    return text_label
 
 
 def card(*children, spacing=None, margins=None):
@@ -115,11 +136,20 @@ def confirm(parent, title, message, danger_text="Delete"):
 
 
 def empty_state(message, hint=""):
-    """The friendly placeholder shown where a list has nothing in it yet."""
+    """The friendly placeholder shown where a list has nothing in it yet.
+
+    Note there is no setAlignment(Qt.AlignCenter) on the layout. Centring a
+    layout makes it hand each child exactly its sizeHint, and when the hint is
+    wrong -- which it is for a wrapping label -- the children end up on top of
+    each other. Padding and centred text gets the same look without the trap.
+    """
     holder = QWidget()
+    holder.setObjectName("plain")
+
     layout = QVBoxLayout(holder)
-    layout.setAlignment(Qt.AlignCenter)
-    layout.setSpacing(theme.SPACE_XS)
+    layout.setContentsMargins(theme.SPACE_MD, theme.SPACE_LG,
+                              theme.SPACE_MD, theme.SPACE_LG)
+    layout.setSpacing(theme.SPACE_SM)
 
     main = QLabel(message)
     main.setAlignment(Qt.AlignCenter)
@@ -130,7 +160,7 @@ def empty_state(message, hint=""):
     if hint:
         sub = QLabel(hint)
         sub.setAlignment(Qt.AlignCenter)
-        sub.setWordWrap(True)
+        wrapped(sub)
         sub.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(sub)
@@ -241,7 +271,7 @@ class FlowLayout(QLayout):
 # ---------------------------------------------------------------------------
 
 class ColorPicker(QWidget):
-    """A grid of colour swatches. The chosen one gets a ring around it.
+    """A grid of color swatches. The chosen one gets a ring around it.
 
     Emits colorChanged(hex_string) whenever the user picks a different one.
     """
@@ -264,7 +294,7 @@ class ColorPicker(QWidget):
             dot.setCursor(Qt.PointingHandCursor)
             # A lambda with a default argument captures the value NOW rather
             # than looking it up later. Without "s=swatch" every button would
-            # end up reporting the last colour in the list -- a classic and
+            # end up reporting the last color in the list -- a classic and
             # very confusing Python loop bug.
             dot.clicked.connect(lambda checked=False, s=swatch: self.set_color(s))
             self._buttons[swatch] = dot
@@ -304,7 +334,7 @@ class ColorPicker(QWidget):
 # ---------------------------------------------------------------------------
 
 def tag_chip(tag, small=False):
-    """A pill showing a tag's name in the tag's own colour.
+    """A pill showing a tag's name in the tag's own color.
 
     Read-only -- it is how a tag looks anywhere it is displayed. Assigning
     tags is done through TagPickerDialog below.
@@ -390,8 +420,8 @@ class TagChipRow(QWidget):
 # ---------------------------------------------------------------------------
 
 class NameColorDialog(QDialog):
-    """Ask for a name and a colour. Used for profiles, floors, rooms,
-    containers, items and tags -- everything in the app is name-and-colour, so
+    """Ask for a name and a color. Used for profiles, floors, rooms,
+    containers, items and tags -- everything in the app is name-and-color, so
     everything shares this one dialog.
 
     Use it like this:
@@ -419,7 +449,7 @@ class NameColorDialog(QDialog):
         self._name_field.selectAll()
         layout.addWidget(self._name_field)
 
-        layout.addWidget(label("Colour", "caption"))
+        layout.addWidget(label("Color", "caption"))
         self._picker = ColorPicker(color or theme.SWATCHES[0])
         layout.addWidget(self._picker)
 
@@ -434,7 +464,7 @@ class NameColorDialog(QDialog):
         layout.addLayout(buttons)
 
     def result_values(self):
-        """The name (trimmed) and colour the user chose."""
+        """The name (trimmed) and color the user chose."""
         return self._name_field.text().strip(), self._picker.color()
 
 
@@ -589,7 +619,7 @@ class PlaceRow(QWidget):
 
 
 class ItemDialog(QDialog):
-    """Create or edit an item: name, colour, tags, notes, and where it lives.
+    """Create or edit an item: name, color, tags, notes, and where it lives.
 
     THE PLACES LIST
     ---------------
@@ -629,7 +659,7 @@ class ItemDialog(QDialog):
         self._name_field.setPlaceholderText("What is it?")
         layout.addWidget(self._name_field)
 
-        layout.addWidget(label("Colour", "caption"))
+        layout.addWidget(label("Color", "caption"))
         self._picker = ColorPicker(item.color if item else theme.SWATCHES[-1])
         layout.addWidget(self._picker)
 
@@ -651,7 +681,7 @@ class ItemDialog(QDialog):
         layout.addWidget(self._places_holder)
 
         self._empty_note = QLabel()
-        self._empty_note.setWordWrap(True)
+        wrapped(self._empty_note)
         self._empty_note.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(self._empty_note)
@@ -834,6 +864,11 @@ class ItemDialog(QDialog):
 # "Hammer x3", "Hammer ×3", "Hammer * 3" -- all mean three hammers.
 QUANTITY_PATTERN = re.compile(r"^(.*?)\s*[x×*]\s*(\d+)$", re.IGNORECASE)
 
+# The top row of the "put them all in" dropdown. Its data is None, which is
+# the same thing an item with no placements means everywhere else in the app,
+# so nothing downstream needs a special case for it.
+UNFILED_CHOICE = "Nowhere yet (just add them to the item list)"
+
 
 def parse_bulk_line(text):
     """Split a typed line into (name, quantity).
@@ -895,30 +930,57 @@ class BulkAddDialog(QDialog):
             "press Add at the bottom.", "caption")
         # Without wrapping, a narrow window silently chops the end off the
         # sentence rather than running it onto a second line.
-        intro.setWordWrap(True)
+        wrapped(intro)
         layout.addWidget(intro)
 
         # -- where they all go ------------------------------------------------
-        layout.addWidget(label("Put them all in", "caption"))
+        self._where_caption = label("Put them all in", "caption")
+        layout.addWidget(self._where_caption)
+
         self._container_field = QComboBox()
+
+        # "Nowhere yet" is a real answer, and it sits at the top because it is
+        # the only one that is always available. Cataloguing and placing are
+        # two different jobs: you write down a boxful of things while they are
+        # in your hands, and work out which drawer they live in later. Forcing
+        # a container here meant the only way to list something you had not
+        # placed yet was to place it somewhere wrong first.
+        self._container_field.addItem(UNFILED_CHOICE, None)
+
         for floor, room, container in profile.iter_containers():
             self._container_field.addItem(
                 f"{floor.name} / {room.name} / {container.name}", container.id)
-            if container.id == default_container_id:
-                self._container_field.setCurrentIndex(
-                    self._container_field.count() - 1)
+
+        # Index 0 is the unfiled row, so anything past it is a real container.
+        has_containers = self._container_field.count() > 1
+
+        # Default to a real place when there is one, because most of the time
+        # you are standing in front of the drawer you are filling. Unfiled is
+        # one row up the list for the times you are not.
+        if has_containers:
+            chosen = self._container_field.findData(default_container_id)
+            self._container_field.setCurrentIndex(chosen if chosen > 0 else 1)
+
+        self._container_field.currentIndexChanged.connect(self._refresh_target)
+
+        # Using the dropdown leaves focus sitting on it, and the next thing
+        # anyone does on this screen is type a name. "activated" only fires
+        # when a person picks something, so it cannot go off while the dialog
+        # is still being built and the text box does not exist yet.
+        self._container_field.activated.connect(self._container_chosen)
+
         layout.addWidget(self._container_field)
 
-        self._no_containers_note = QLabel(
-            "There are no containers yet, so these will be added unfiled. "
-            "Draw a room and add a container first if you want them placed.")
-        self._no_containers_note.setWordWrap(True)
-        self._no_containers_note.setStyleSheet(
-            f"color: {theme.WARNING}; font-size: {theme.FONT_SIZE_SM}px;")
-        has_containers = self._container_field.count() > 0
+        # One label covering both reasons the batch might end up unfiled: you
+        # asked for it, or there is nowhere to put anything yet.
+        self._target_note = QLabel()
+        wrapped(self._target_note)
+        layout.addWidget(self._target_note)
+
+        # A dropdown with one row in it is just a decoration.
         self._container_field.setVisible(has_containers)
-        self._no_containers_note.setVisible(not has_containers)
-        layout.addWidget(self._no_containers_note)
+        self._where_caption.setVisible(has_containers)
+        self._refresh_target()
 
         # -- tags for the whole batch -----------------------------------------
         layout.addWidget(label("Tag them all with", "caption"))
@@ -953,11 +1015,30 @@ class BulkAddDialog(QDialog):
         self._queue_label.setObjectName("caption")
         queue_header.addWidget(self._queue_label)
         queue_header.addStretch()
-        queue_header.addWidget(button("Remove selected", "ghost",
-                                      self._remove_selected, size="sm"))
+        self._remove_button = button("Remove selected", "ghost",
+                                     self._remove_selected, size="sm",
+                                     tooltip="Click rows in the list to "
+                                             "select them; click again to "
+                                             "let go")
+        self._remove_button.setEnabled(False)
+        queue_header.addWidget(self._remove_button)
         layout.addLayout(queue_header)
 
         self._list = QListWidget()
+
+        # Clicking toggles, so clicking a selected row lets go of it again.
+        # With plain single selection there is no way to end up with nothing
+        # selected once you have clicked something, which is maddening.
+        self._list.setSelectionMode(QAbstractItemView.MultiSelection)
+
+        # The list never takes keyboard focus. This is the important one.
+        # Clicking a row used to move focus off the text box, so everything you
+        # typed afterwards went into the list's type-ahead search instead of
+        # the box, and Enter went somewhere else entirely. Now a click selects
+        # the row and your typing carries straight on.
+        self._list.setFocusPolicy(Qt.NoFocus)
+
+        self._list.itemSelectionChanged.connect(self._refresh_counts)
         layout.addWidget(self._list, 1)
 
         # -- buttons -------------------------------------------------------------
@@ -969,7 +1050,52 @@ class BulkAddDialog(QDialog):
         buttons.addWidget(self._save_button)
         layout.addLayout(buttons)
 
+        # Every button in a QDialog is an "auto default" button, meaning Qt
+        # will fire one of them when you press Enter and the focus is not on a
+        # button itself. In this dialog that is completely wrong: Enter means
+        # "add the line I just typed", and nothing else. Left alone, Qt picked
+        # Remove selected, so typing a name and pressing Enter silently
+        # DELETED a queued row instead of adding a new one.
+        for candidate in self.findChildren(QPushButton):
+            candidate.setAutoDefault(False)
+            candidate.setDefault(False)
+
         self._entry.setFocus()
+
+    # -- where the batch is going ----------------------------------------------
+
+    def _container_chosen(self, _index):
+        self._entry.setFocus()
+
+    def _refresh_target(self):
+        """Say what will happen to the batch, but only when it needs saying.
+
+        Picking a container is self-explanatory, so that case gets no note at
+        all. The two unfiled cases do need one, and they are different: one is
+        a choice and one is a limitation, so they do not get the same color.
+        """
+        no_containers = self._container_field.count() <= 1
+        unfiled = self._container_field.currentData() is None
+
+        if no_containers:
+            self._target_note.setText(
+                "There are no containers yet, so these will be added unfiled. "
+                "Draw a room and add a container first if you want them "
+                "placed.")
+            color = theme.WARNING
+        elif unfiled:
+            self._target_note.setText(
+                "These go straight into the item list with no place of their "
+                "own. You will find them under Unfiled, ready to file "
+                "whenever you like.")
+            color = theme.TEXT_FAINT
+        else:
+            self._target_note.setVisible(False)
+            return
+
+        self._target_note.setStyleSheet(
+            f"color: {color}; font-size: {theme.FONT_SIZE_SM}px;")
+        self._target_note.setVisible(True)
 
     # -- queue management ------------------------------------------------------
 
@@ -988,11 +1114,25 @@ class BulkAddDialog(QDialog):
         self._refresh_counts()
 
     def _remove_selected(self):
-        row = self._list.currentRow()
-        if row < 0:
+        """Drop every selected row.
+
+        Reads selectedIndexes() rather than currentRow(). The "current" row is
+        a different idea from the selected one: it survives clearing the
+        selection, so the old version happily deleted a row while nothing
+        appeared to be selected at all.
+
+        Deleting from the bottom up, because removing row 1 would renumber
+        everything below it and the next index would point at the wrong thing.
+        """
+        rows = sorted((index.row() for index in self._list.selectedIndexes()),
+                      reverse=True)
+        if not rows:
             return
-        self._list.takeItem(row)
-        del self._queued[row]
+
+        for row in rows:
+            self._list.takeItem(row)
+            del self._queued[row]
+
         self._refresh_counts()
         self._entry.setFocus()
 
@@ -1010,6 +1150,13 @@ class BulkAddDialog(QDialog):
         self._save_button.setEnabled(count > 0)
         self._save_button.setText("Add" if count == 0 else f"Add {count}")
 
+        # Greyed out when there is nothing to remove, so the button's state
+        # always matches what the list looks like.
+        selected = len(self._list.selectedIndexes())
+        self._remove_button.setEnabled(selected > 0)
+        self._remove_button.setText(
+            "Remove selected" if selected < 2 else f"Remove {selected}")
+
     def _edit_tags(self):
         dialog = TagPickerDialog(self, self._profile, self._tag_ids, "batch")
         if dialog.exec():
@@ -1024,6 +1171,13 @@ class BulkAddDialog(QDialog):
 
         Everything shares the chosen container and tags; only the name and
         quantity differ per line.
+
+        With "Nowhere yet" picked the container id is None, and an item with
+        no placements is exactly what Unfiled means, so there is nothing
+        special to do beyond skipping the placement. The quantity goes into
+        `unfiled_quantity` either way: for a placed item it is ignored while
+        it has somewhere to live, and it is there as a sensible number to fall
+        back on if you later take it out of every container.
         """
         container_id = self._container_field.currentData()
         created = []

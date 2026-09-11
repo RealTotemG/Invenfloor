@@ -30,14 +30,15 @@ Sims dropping into a single room to furnish it.
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QGraphicsPathItem, QGraphicsScene, QGraphicsView, QGraphicsRectItem,
+    QGraphicsPathItem, QGraphicsScene, QGraphicsView, QGraphicsRectItem, QMenu,
 )
 
 import theme
 from floor_items import (
-    EDIT_RESIZE, ContainerItem, RoomItem, snap, snap_point, qcolor,
+    EDIT_RESIZE, EDIT_VERTICES, ContainerItem, RoomItem, VertexHandle,
+    snap, snap_point, qcolor,
 )
-from models import Container, Room
+from models import Container, Room, ROOM_PRESETS
 
 # The modes. Plain strings keep them readable in the debugger and in the
 # toolbar code.
@@ -63,6 +64,9 @@ class FloorView(QGraphicsView):
     dataChanged = Signal()           # something was edited; please autosave
     roomFocused = Signal(object)     # a Room, or None
     modeChanged = Signal(str)
+    renameRequested = Signal(object)     # a Room or a Container
+    addItemRequested = Signal(object)    # a Container
+    editModeChanged = Signal(str)        # which handles rooms are showing
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,10 +143,21 @@ class FloorView(QGraphicsView):
         self.roomFocused.emit(None)
 
     def set_room_edit_mode(self, mode):
-        """Switch every room between resize handles and per-corner handles."""
+        """Switch every room between resize handles and per-corner handles.
+
+        The view owns this setting. The inspector used to keep its own copy,
+        which meant changing the mode from the canvas menu left the
+        inspector's buttons showing the old one. Now the view announces the
+        change and the inspector follows.
+        """
+        if mode == self.room_edit_mode:
+            return
+
         self.room_edit_mode = mode
         for room_item in self.room_items:
             room_item.set_edit_mode(mode)
+
+        self.editModeChanged.emit(mode)
 
     def refresh(self):
         """Redraw everything without rebuilding it.
@@ -423,6 +438,17 @@ class FloorView(QGraphicsView):
 
         if self.mode == MODE_SELECT:
             room_item = self._room_item_at(scene_point)
+
+            # While editing an outline, a double-click on the room means "put
+            # a corner here", not "go inside". You are working on the shape,
+            # so that is the more useful reading of the gesture.
+            if (room_item is not None
+                    and room_item.isSelected()
+                    and not room_item.focused
+                    and self.room_edit_mode == EDIT_VERTICES):
+                room_item.add_vertex_near(room_item.mapFromScene(scene_point))
+                return
+
             if room_item is not None:
                 # Double-clicking the already-focused room steps back out.
                 if room_item is self.focused_room_item:
@@ -678,6 +704,170 @@ class FloorView(QGraphicsView):
                 self.dataChanged.emit()
                 self.itemSelected.emit(None)
                 return
+
+    # -- right-click menus -------------------------------------------------------
+
+    def contextMenuEvent(self, event):
+        """Build a menu that depends on what you right-clicked.
+
+        Four different things can be under the cursor, and each gets the
+        actions that make sense for it. A menu offering "Delete room" when you
+        clicked bare canvas is worse than no menu at all.
+        """
+        if self.profile is None or self.floor is None:
+            return
+
+        scene_point = self.mapToScene(event.pos())
+        clicked = self.itemAt(event.pos())
+        room_item = self._room_item_at(scene_point)
+
+        # A container is drawn as a child of its room, so a click can land on
+        # it rather than the room. Walk up the parents to find out.
+        container_item = None
+        node = clicked
+        while node is not None:
+            if isinstance(node, ContainerItem):
+                container_item = node
+                break
+            node = node.parentItem()
+
+        # Right-clicking something selects it first. Without this you could
+        # pick "Edit shape handles" on a room that was never selected, set the
+        # mode, and see nothing happen -- because handles only show on the
+        # selected room. Acting on a thing you have not pointed at is not a
+        # thing any other app does either.
+        if container_item is not None and not container_item.isSelected():
+            self.scene().clearSelection()
+            container_item.setSelected(True)
+        elif (room_item is not None
+                and not isinstance(clicked, VertexHandle)
+                and not room_item.isSelected()):
+            self.scene().clearSelection()
+            room_item.setSelected(True)
+
+        menu = QMenu(self)
+
+        if isinstance(clicked, VertexHandle):
+            self._build_vertex_menu(menu, clicked)
+        elif container_item is not None:
+            self._build_container_menu(menu, container_item)
+        elif room_item is not None:
+            self._build_room_menu(menu, room_item, scene_point)
+        else:
+            self._build_canvas_menu(menu)
+
+        if not menu.isEmpty():
+            menu.exec(event.globalPos())
+
+    def _add_room_submenu(self, menu):
+        """The "Add room" branch, shared by the canvas and room menus."""
+        add_room = menu.addMenu("Add room")
+        add_room.addAction("Draw room…").triggered.connect(
+            lambda: self.set_mode(MODE_DRAW_ROOM))
+
+        presets = add_room.addMenu("Preset shape")
+        for name, builder in ROOM_PRESETS:
+            # Default argument again: without b=builder every entry would use
+            # whichever shape happened to be last in the list.
+            presets.addAction(name).triggered.connect(
+                lambda checked=False, b=builder: self.set_shape_tool(b))
+
+    def _build_canvas_menu(self, menu):
+        self._add_room_submenu(menu)
+        menu.addSeparator()
+        menu.addAction("Fit floor to window").triggered.connect(
+            self.fit_to_rooms)
+        menu.addAction("Reset zoom").triggered.connect(self.reset_zoom)
+
+    def _build_room_menu(self, menu, room_item, scene_point):
+        menu.addAction("Add container here").triggered.connect(
+            lambda: self._add_container_at(room_item, scene_point))
+        menu.addSeparator()
+
+        if room_item is self.focused_room_item:
+            menu.addAction("Stop working in this room").triggered.connect(
+                lambda: self.set_focused_room(None))
+        else:
+            menu.addAction("Work inside this room").triggered.connect(
+                lambda: self.set_focused_room(room_item))
+
+        # A checkable pair, so the menu also tells you which mode you are in.
+        resize = menu.addAction("Resize handles")
+        shape = menu.addAction("Edit shape handles")
+        for action, mode in ((resize, EDIT_RESIZE), (shape, EDIT_VERTICES)):
+            action.setCheckable(True)
+            action.setChecked(self.room_edit_mode == mode)
+            action.triggered.connect(
+                lambda checked=False, m=mode: self.set_room_edit_mode(m))
+
+        menu.addSeparator()
+        menu.addAction("Rename…").triggered.connect(
+            lambda: self.renameRequested.emit(room_item.room))
+        menu.addAction("Delete room").triggered.connect(
+            lambda: self._delete_room_item(room_item))
+
+        menu.addSeparator()
+        self._add_room_submenu(menu)
+
+    def _build_container_menu(self, menu, container_item):
+        menu.addAction("Add item here…").triggered.connect(
+            lambda: self.addItemRequested.emit(container_item.container))
+        menu.addSeparator()
+        menu.addAction("Rename…").triggered.connect(
+            lambda: self.renameRequested.emit(container_item.container))
+        menu.addAction("Delete container").triggered.connect(
+            lambda: self._delete_container_item(container_item))
+
+    def _build_vertex_menu(self, menu, handle):
+        room = handle.room_item.room
+        action = menu.addAction("Remove this corner")
+        # Below three corners a polygon stops enclosing anything, so the model
+        # refuses. Better to grey the option out than to offer it and fail.
+        action.setEnabled(len(room.points) > 3)
+        if not action.isEnabled():
+            action.setText("Remove this corner (needs at least 3)")
+        action.triggered.connect(
+            lambda: handle.room_item.remove_vertex(handle.index))
+
+    # -- actions the menus call --------------------------------------------------
+
+    def _add_container_at(self, room_item, scene_point):
+        """Drop a default-sized container where you right-clicked."""
+        local = room_item.mapFromScene(scene_point)
+        left, top, width, height = room_item.room.bounds()
+
+        box_width = min(120.0, max(40.0, width * 0.4))
+        box_height = min(90.0, max(40.0, height * 0.4))
+
+        # Centre it on the click, then pull it back inside the walls.
+        x = snap(min(max(local.x() - box_width / 2, left),
+                     left + width - box_width))
+        y = snap(min(max(local.y() - box_height / 2, top),
+                     top + height - box_height))
+
+        existing = len(room_item.room.containers)
+        container = Container(
+            name=f"Container {existing + 1}",
+            color=theme.SWATCHES[(existing + 2) % len(theme.SWATCHES)],
+            x=x, y=y, w=box_width, h=box_height,
+        )
+        item = room_item.add_container(container)
+        self.scene().clearSelection()
+        item.setSelected(True)
+
+    def _delete_room_item(self, room_item):
+        room = room_item.room
+        self.profile.delete_room(room.id)
+        self.remove_room_item(room)
+        self.itemSelected.emit(None)
+        self.dataChanged.emit()
+
+    def _delete_container_item(self, container_item):
+        room_item = container_item.room_item
+        self.profile.delete_container(container_item.container.id)
+        room_item.rebuild()
+        self.itemSelected.emit(None)
+        self.dataChanged.emit()
 
     # -- the grid -------------------------------------------------------------------
 

@@ -41,7 +41,7 @@ import theme
 from models import Item, Tag
 from widgets import (
     BulkAddDialog, ItemDialog, NameColorDialog, TagChipRow, button, confirm,
-    empty_state, label, tag_chip,
+    empty_state, label, tag_chip, wrapped,
 )
 
 TAG_PANEL_WIDTH = 270
@@ -364,7 +364,7 @@ class ItemsSection(QWidget):
         if not self.profile.tags:
             layout.addWidget(empty_state(
                 "No tags yet",
-                "Tags let you group items across rooms — 'Tools', "
+                "Tags let you group items across rooms: 'Tools', "
                 "'Christmas', 'Fragile'."))
         else:
             for tag in self.profile.tags:
@@ -400,7 +400,7 @@ class ItemsSection(QWidget):
         # vary by machine, and a character with no glyph renders as a blank
         # box. Not worth the risk for two buttons.
         layout.addWidget(button("Edit", "ghost", lambda: self._edit_tag(tag),
-                                "Rename or recolour", size="sm"))
+                                "Rename or recolor", size="sm"))
         layout.addWidget(button("✕", "ghost", lambda: self._delete_tag(tag),
                                 "Delete tag", size="icon"))
 
@@ -527,7 +527,7 @@ class ItemsSection(QWidget):
             "These items carry a tag that some room claims, but they are not "
             "in any of those rooms. Either move the item, or tag the room "
             "it's actually in.")
-        note.setWordWrap(True)
+        wrapped(note)
         note.setStyleSheet(
             f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(note)
@@ -559,7 +559,7 @@ class ItemsSection(QWidget):
         else:
             note = QLabel(", ".join(f"{floor.name} / {room.name}"
                                     for floor, room in rooms))
-        note.setWordWrap(True)
+        wrapped(note)
         note.setStyleSheet(
             f"color: {theme.TEXT_MUTED if rooms else theme.TEXT_FAINT}; "
             f"font-size: {theme.FONT_SIZE_SM}px;")

@@ -201,6 +201,8 @@ class LayoutSection(QWidget):
         self.view.dataChanged.connect(self._on_data_changed)
         self.view.roomFocused.connect(self._on_room_focused)
         self.view.modeChanged.connect(self._on_mode_changed)
+        self.view.renameRequested.connect(self._rename_subject)
+        self.view.addItemRequested.connect(self._add_item_to_container)
         body.addWidget(self.view, 1)
 
         self.inspector = Inspector()
@@ -210,6 +212,10 @@ class LayoutSection(QWidget):
         self.inspector.editModeChanged.connect(self.view.set_room_edit_mode)
         self.inspector.deletedRoom.connect(self._delete_room)
         self.inspector.deletedContainer.connect(self._delete_container)
+
+        # Connected here rather than up with the other view signals, because
+        # the inspector does not exist yet at that point in this method.
+        self.view.editModeChanged.connect(self.inspector.set_edit_mode)
         body.addWidget(self.inspector)
 
         outer.addLayout(body, 1)
@@ -378,17 +384,44 @@ class LayoutSection(QWidget):
         self.dataChanged.emit()
 
     def _on_inspector_changed(self):
-        # An edit in the panel changes labels and colours on the canvas, so
+        # An edit in the panel changes labels and colors on the canvas, so
         # the canvas has to repaint even though nothing moved.
         self.view.refresh()
         self.strip.rebuild()
         self.dataChanged.emit()
 
     def _on_room_focused(self, room):
+        # The inspector needs to know too, so its "Work inside this room"
+        # button can say you are already in there.
+        self.inspector.set_focused_room(room)
+
         if room is None:
             self._hint.setText("")
         else:
             self._hint.setText(f"Working inside {room.name} · Esc to step out")
+
+    def _rename_subject(self, subject):
+        """Rename a room or a container from the canvas right-click menu.
+
+        One function for both because they are the same shape: a name and a
+        color. The dialog does not care which it is looking at.
+        """
+        dialog = NameColorDialog(self, "Rename", subject.name, subject.color)
+        if not dialog.exec():
+            return
+
+        name, color = dialog.result_values()
+        if not name:
+            return
+
+        subject.name = name
+        subject.color = color
+        self.view.refresh()
+        self.inspector.show_selection(self.inspector.selection)
+        self.dataChanged.emit()
+
+    def _add_item_to_container(self, container):
+        self.inspector.add_item_to(container)
 
     def _focus_room(self, room):
         for room_item in self.view.room_items:

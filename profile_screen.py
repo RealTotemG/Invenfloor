@@ -60,8 +60,8 @@ class ProfileCard(QFrame):
                                   theme.SPACE_LG, theme.SPACE_MD)
         layout.setSpacing(theme.SPACE_XS)
 
-        # A short bar in the profile's colour, so the grid is scannable by
-        # colour before you have read a single word.
+        # A short bar in the profile's color, so the grid is scannable by
+        # color before you have read a single word.
         stripe = QFrame()
         stripe.setFixedHeight(4)
         stripe.setFixedWidth(42)
@@ -114,9 +114,9 @@ class ProfileCard(QFrame):
         ])
 
     def _apply_style(self, hovered):
-        """Cards tint towards their own colour on hover.
+        """Cards tint towards their own color on hover.
 
-        Written here rather than in theme.py's stylesheet because the colour
+        Written here rather than in theme.py's stylesheet because the color
         depends on the individual profile, which the global sheet can't know.
         """
         background = theme.BG_HOVER if hovered else theme.BG_CARD

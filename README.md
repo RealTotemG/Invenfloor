@@ -113,13 +113,31 @@ oval and an L keeps its notch. Containers get pulled back inside if you shrink
 the room past them. There are W and H boxes in the inspector if you'd rather
 type an exact size.
 
-Switch to "Edit shape" and you get round handles on every corner instead, for
-changing the outline itself. I kept those separate deliberately. A circle is
-stored as a twenty-sided polygon, and twenty round handles scattered over it is
-unusable, but four corner handles to stretch it into an oval works fine.
+Switch to "Edit shape" and it becomes a genuinely different mode. You get round
+handles on every corner, the room locks in place so a drag on the body means
+"I'm working on this outline" rather than "move this", and you can change how
+many corners there are at all. Double-click a wall to add a corner, right-click
+a corner to delete it. That's how you turn a plain rectangle into an L without
+redrawing it.
+
+The new corner lands on the wall you clicked rather than exactly where your
+mouse was, so the shape doesn't suddenly dent before you've asked it to. You
+add the corner, then drag it where you want.
+
+The first version of this had the two modes swapping handles and nothing else,
+and on a rectangle that's almost invisible, because all four corner handles sit
+on exactly the same spots as the four resize handles. It looked broken even
+though it worked. Locking movement and adding corner editing is what makes the
+mode worth having.
 
 **Containers.** Pick Add container and drag a box inside a room. You can't drag
 one on empty canvas, on purpose.
+
+**Right-click anywhere on the canvas** and you get a menu for whatever is under
+the cursor. On empty space it offers Add room, with Draw room and Preset shape
+underneath it. On a room you get Add container here, the work-inside toggle,
+the handle modes, rename and delete. On a container, add an item or delete it.
+On a corner, remove that corner.
 
 **Working inside a room.** Double-click it. Everything else fades back, the
 room itself locks so you can't shove it by mistake, and its containers become
@@ -135,10 +153,17 @@ to the right floor, selects the container and flashes it for a second. An item
 kept in two places gets a Find on each line of its breakdown, because "find it"
 means something different for each one.
 
-**Adding a lot at once.** Add many (Ctrl+B) asks which container once, then
-gets out of your way. Type a name, press Enter, type the next. Stick `x3` on
-the end for a quantity, like `Zip ties x50`. Nothing saves until you press Add,
-so a typo is just a line to delete.
+**Adding a lot at once.** Add many (Ctrl+B) asks where they go once, then gets
+out of your way. Type a name, press Enter, type the next. Stick `x3` on the end
+for a quantity, like `Zip ties x50`. Nothing saves until you press Add, so a
+typo is just a line to delete.
+
+The top of that dropdown is "Nowhere yet", which adds everything straight to
+the item list with no place of its own. Cataloguing and placing are two
+different jobs. You write things down while they're in your hands and work out
+which drawer they live in later, so the batch lands under Unfiled and waits for
+you. Without that option the only way to list something you hadn't placed yet
+was to put it somewhere wrong first.
 
 This one matters more than it looks. The thing that kills an inventory app is
 the first two hundred items. If every one costs you a dialog and six fields,
@@ -241,6 +266,17 @@ bit me. A height a pixel short of what the font needs shaves the tops and
 bottoms off the letters, and it looks like a font problem rather than a layout
 one, so you go looking in completely the wrong place. Use `setMinimumHeight`
 instead.
+
+**Wrapping text needs two things, not one.** `setWordWrap(True)` only tells the
+label it's allowed to wrap. A layout won't ask "how tall are you at this width?"
+unless the widget's size *policy* says it has an answer, and QLabel doesn't set
+that flag for you. So the layout reserves one line, the text wraps onto two, and
+the second line gets painted outside the space reserved for it. On screen that
+looks like text cut in half or overlapping whatever's underneath.
+
+There's a `wrapped()` helper in `widgets.py` that does both halves. Use it
+instead of `setWordWrap`. I got this wrong in nine places before I noticed, and
+in every one of them the symptom pointed somewhere other than the cause.
 
 ## Changing things
 

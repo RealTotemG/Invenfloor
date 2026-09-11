@@ -136,7 +136,7 @@ class Workspace(QWidget):
                                   theme.SPACE_MD, theme.SPACE_MD)
         layout.setSpacing(theme.SPACE_SM)
 
-        # Profile name with its colour dot.
+        # Profile name with its color dot.
         header = QHBoxLayout()
         header.setSpacing(theme.SPACE_SM)
         self._profile_dot = QFrame()

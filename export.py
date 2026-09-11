@@ -109,7 +109,7 @@ def export_floors_pdf(profile, path):
     writer.setPageSize(QPageSize(QPageSize.A4))
     writer.setPageOrientation(QPageLayout.Landscape)
     writer.setResolution(PDF_RESOLUTION)
-    writer.setTitle(f"{profile.name} — floor plans")
+    writer.setTitle(f"{profile.name} floor plans")
 
     painter = QPainter(writer)
 

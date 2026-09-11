@@ -16,10 +16,10 @@ so going back to the launcher and opening a profile again is instant.
 
 WHERE TO LOOK FOR THINGS
 ------------------------
-    theme.py            every colour, size and font -- start here to restyle
+    theme.py            every color, size and font -- start here to restyle
     models.py           what a profile, floor, room, container, item and tag are
     storage.py          loading and saving; also the packaging-safe save path
-    widgets.py          shared pieces: colour picker, tag chips, dialogs
+    widgets.py          shared pieces: color picker, tag chips, dialogs
     profile_screen.py   the launcher
     workspace.py        the sidebar shell and the autosave timer
     layout_section.py   floors, toolbar, and the wiring for the canvas
