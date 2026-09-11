@@ -186,7 +186,7 @@ class FloorView(QGraphicsView):
                 return
 
     def reveal_container(self, container_id):
-        """Select a container, centre the view on it, and make it blink.
+        """Select a container, center the view on it, and make it blink.
 
         This is the other end of the Find button on the Items screen. Selecting
         alone is too subtle -- on a floor with twenty containers your eye has
@@ -620,7 +620,7 @@ class FloorView(QGraphicsView):
 
         # A click rather than a drag still places the shape, at a sensible
         # default size. Requiring a precise drag just to get a rectangle would
-        # be needlessly fussy -- you can resize it immediately afterwards.
+        # be needlessly fussy -- you can resize it immediately afterward.
         if rect.width() < theme.GRID_SIZE or rect.height() < theme.GRID_SIZE:
             rect = QRectF(rect.left(), rect.top(),
                           DEFAULT_SHAPE_SIZE, DEFAULT_SHAPE_SIZE)
@@ -822,7 +822,7 @@ class FloorView(QGraphicsView):
         room = handle.room_item.room
         action = menu.addAction("Remove this corner")
         # Below three corners a polygon stops enclosing anything, so the model
-        # refuses. Better to grey the option out than to offer it and fail.
+        # refuses. Better to gray the option out than to offer it and fail.
         action.setEnabled(len(room.points) > 3)
         if not action.isEnabled():
             action.setText("Remove this corner (needs at least 3)")
@@ -839,7 +839,7 @@ class FloorView(QGraphicsView):
         box_width = min(120.0, max(40.0, width * 0.4))
         box_height = min(90.0, max(40.0, height * 0.4))
 
-        # Centre it on the click, then pull it back inside the walls.
+        # Center it on the click, then pull it back inside the walls.
         x = snap(min(max(local.x() - box_width / 2, left),
                      left + width - box_width))
         y = snap(min(max(local.y() - box_height / 2, top),
@@ -924,7 +924,7 @@ class FloorView(QGraphicsView):
     # -- view helpers -----------------------------------------------------------------
 
     def fit_to_rooms(self):
-        """Zoom and centre so the whole floor is visible."""
+        """Zoom and center so the whole floor is visible."""
         if not self.room_items:
             self.reset_zoom()
             return

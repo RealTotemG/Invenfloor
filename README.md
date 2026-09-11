@@ -16,10 +16,10 @@ pip install -r requirements.txt
 python main.py
 ```
 
-You only need the pip line once. If Windows doesn't recognise `python`, try
+You only need the pip line once. If Windows doesn't recognize `python`, try
 `py main.py` instead.
 
-## How the data is organised
+## How the data is organized
 
 Everything hangs off one structure. Once this makes sense the rest of the app
 does too, because every screen is just a window onto one level of it.
@@ -54,7 +54,7 @@ Item("Towels", placements=[
 ])
 ```
 
-There's still only one "Towels" in the catalogue. One name, one color, one set
+There's still only one "Towels" in the catalog. One name, one color, one set
 of tags, with its 14 towels split across two places. If I'd let you create it
 twice instead, you'd have to rename it twice and retag it twice, and sooner or
 later the two copies would disagree with each other.
@@ -87,7 +87,7 @@ place. A container is a thing you open.
 | `floor_view.py` | The canvas: grid, zoom, pan, drawing tools |
 | `floor_items.py` | How a room and a container draw and drag themselves |
 | `inspector.py` | The edit panel down the right |
-| `items_section.py` | The item catalogue, the saved views, the tag manager |
+| `items_section.py` | The item catalog, the saved views, the tag manager |
 | `export.py` | Writing CSV and PDF. Doesn't touch any screens. |
 | `main.py` | Starts the app and swaps between launcher and workspace |
 
@@ -159,7 +159,7 @@ for a quantity, like `Zip ties x50`. Nothing saves until you press Add, so a
 typo is just a line to delete.
 
 The top of that dropdown is "Nowhere yet", which adds everything straight to
-the item list with no place of its own. Cataloguing and placing are two
+the item list with no place of its own. Cataloging and placing are two
 different jobs. You write things down while they're in your hands and work out
 which drawer they live in later, so the batch lands under Unfiled and waits for
 you. Without that option the only way to list something you hadn't placed yet

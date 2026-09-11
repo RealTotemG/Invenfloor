@@ -26,7 +26,7 @@ WHERE TO LOOK FOR THINGS
     floor_view.py       the canvas: grid, zoom, pan, drawing tools
     floor_items.py      how a room and a container draw and drag themselves
     inspector.py        the right-hand edit panel
-    items_section.py    the item catalogue and the tag manager
+    items_section.py    the item catalog and the tag manager
 """
 
 import sys

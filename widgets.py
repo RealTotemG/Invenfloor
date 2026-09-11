@@ -6,7 +6,7 @@ Small user-interface pieces that more than one screen needs: the color
 picker, the tag chips, the little "name and color" dialog, and so on.
 
 Anything that appears on two different screens belongs in here. That is the
-whole rule. It keeps the screen files about layout and behaviour rather than
+whole rule. It keeps the screen files about layout and behavior rather than
 about re-inventing a color picker three times.
 
 A NOTE ON SIGNALS
@@ -120,7 +120,7 @@ def divider():
 def confirm(parent, title, message, danger_text="Delete"):
     """Ask a yes/no question. Returns True if the user agreed.
 
-    Used before anything destructive. The confirming button is labelled with
+    Used before anything destructive. The confirming button is labeled with
     the actual verb ("Delete") rather than "OK", because a button that says
     what it does is much harder to click by accident.
     """
@@ -138,10 +138,10 @@ def confirm(parent, title, message, danger_text="Delete"):
 def empty_state(message, hint=""):
     """The friendly placeholder shown where a list has nothing in it yet.
 
-    Note there is no setAlignment(Qt.AlignCenter) on the layout. Centring a
+    Note there is no setAlignment(Qt.AlignCenter) on the layout. Centering a
     layout makes it hand each child exactly its sizeHint, and when the hint is
     wrong -- which it is for a wrapping label -- the children end up on top of
-    each other. Padding and centred text gets the same look without the trap.
+    each other. Padding and centered text gets the same look without the trap.
     """
     holder = QWidget()
     holder.setObjectName("plain")
@@ -179,7 +179,7 @@ class FlowLayout(QLayout):
     Qt does not ship one, and tag chips need it: you never know how many tags
     something has or how long their names are.
 
-    You do not need to follow the maths in here to use the app. The one method
+    You do not need to follow the math in here to use the app. The one method
     that matters is _do_layout(), which walks the widgets keeping track of the
     current x position, and drops to the next line when the next widget would
     overflow the right edge.
@@ -267,7 +267,7 @@ class FlowLayout(QLayout):
 
 
 # ---------------------------------------------------------------------------
-# COLOUR PICKER
+# COLOR PICKER
 # ---------------------------------------------------------------------------
 
 class ColorPicker(QWidget):
@@ -503,7 +503,7 @@ class TagPickerDialog(QDialog):
         buttons = QHBoxLayout()
         # Being able to invent a tag without abandoning what you were doing
         # matters: otherwise tagging something with a tag you have not created
-        # yet means cancelling, going to the Items screen, and starting over.
+        # yet means canceling, going to the Items screen, and starting over.
         buttons.addWidget(button("+ New tag", "ghost", self._create_tag,
                                  size="sm"))
         buttons.addStretch()
@@ -689,7 +689,7 @@ class ItemDialog(QDialog):
         # Shown only while the item has no places. Without it you could not
         # write down how many of something you own until you had drawn a room
         # and a container to put it in, which is the wrong way round when you
-        # are stood over a box trying to catalogue it.
+        # are stood over a box trying to catalog it.
         self._unfiled_row = QWidget()
         self._unfiled_row.setObjectName("plain")
         unfiled_layout = QHBoxLayout(self._unfiled_row)
@@ -940,7 +940,7 @@ class BulkAddDialog(QDialog):
         self._container_field = QComboBox()
 
         # "Nowhere yet" is a real answer, and it sits at the top because it is
-        # the only one that is always available. Cataloguing and placing are
+        # the only one that is always available. Cataloging and placing are
         # two different jobs: you write down a boxful of things while they are
         # in your hands, and work out which drawer they live in later. Forcing
         # a container here meant the only way to list something you had not
@@ -1033,7 +1033,7 @@ class BulkAddDialog(QDialog):
 
         # The list never takes keyboard focus. This is the important one.
         # Clicking a row used to move focus off the text box, so everything you
-        # typed afterwards went into the list's type-ahead search instead of
+        # typed afterward went into the list's type-ahead search instead of
         # the box, and Enter went somewhere else entirely. Now a click selects
         # the row and your typing carries straight on.
         self._list.setFocusPolicy(Qt.NoFocus)
@@ -1150,7 +1150,7 @@ class BulkAddDialog(QDialog):
         self._save_button.setEnabled(count > 0)
         self._save_button.setText("Add" if count == 0 else f"Add {count}")
 
-        # Greyed out when there is nothing to remove, so the button's state
+        # Grayed out when there is nothing to remove, so the button's state
         # always matches what the list looks like.
         selected = len(self._list.selectedIndexes())
         self._remove_button.setEnabled(selected > 0)

@@ -2,7 +2,7 @@
 items_section.py
 ================
 
-The "Items" half of the app: the catalogue of everything in this profile, the
+The "Items" half of the app: the catalog of everything in this profile, the
 tags that describe it, and a few saved views over the top.
 
 ONE ROW PER ITEM
@@ -11,7 +11,7 @@ An item can be kept in several containers at once -- towels in the kitchen and
 the bathroom -- but it still gets exactly ONE row here. The row shows the
 total, and you expand it to see the split.
 
-That is the point of the catalogue: it is a list of things you own, not a list
+That is the point of the catalog: it is a list of things you own, not a list
 of piles. If "Towels" appeared twice you would have to rename it twice, retag
 it twice, and eventually the two copies would disagree with each other.
 

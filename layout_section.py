@@ -161,7 +161,7 @@ class FloorStrip(QWidget):
 
         # QFrame has no clicked signal, so we borrow its mouse event. Assigning
         # a function to an instance like this is a small Python trick that
-        # saves writing a whole subclass for one line of behaviour.
+        # saves writing a whole subclass for one line of behavior.
         def on_click(event, i=index):
             self.floorSelected.emit(i)
 
@@ -451,7 +451,7 @@ class LayoutSection(QWidget):
         return self.view.reveal_container(container_id)
 
     def _resize_room(self, room, width, height):
-        # Note we do NOT rebuild the inspector afterwards. The W/H boxes the
+        # Note we do NOT rebuild the inspector afterward. The W/H boxes the
         # user is currently typing in live there, and replacing them mid-edit
         # would steal the keyboard focus on every keystroke.
         self.view.resize_room(room, width, height)

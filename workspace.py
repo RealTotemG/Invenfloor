@@ -6,7 +6,7 @@ The window you get after opening a profile: a narrow sidebar on the left, and
 one of the two big sections filling the rest.
 
     Layout  the floors, rooms and containers -- where things are
-    Items   the catalogue and its tags       -- what things are
+    Items   the catalog and its tags       -- what things are
 
 Both edit the same Profile object in memory, so a container you draw in Layout
 shows up instantly in the "lives in" dropdown over in Items. There is only one

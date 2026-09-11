@@ -39,14 +39,14 @@ does not have a single location and a single quantity. It has a list:
         Placement(container_id="bathroom shelf", quantity=8),
     ])
 
-There is still exactly ONE "Towels" item in the catalogue -- one name, one
+There is still exactly ONE "Towels" item in the catalog -- one name, one
 color, one set of tags -- and its 14 towels are split across two places. That
 is the thing worth getting right: duplicating the item would mean renaming or
 retagging it twice and having the two copies drift apart.
 
 An item with an empty placements list is "unfiled": you own it, but you have
 not said where it lives. That is a normal state, not an error -- it lets you
-catalogue a box of things quickly and sort out where they go afterwards.
+catalog a box of things quickly and sort out where they go afterward.
 
 ABOUT COORDINATES
 -----------------
@@ -294,7 +294,7 @@ class Container:
 def closest_point_on_segment(ax, ay, bx, by, px, py):
     """The point on the line segment A-B nearest to P, and how far away it is.
 
-    Used to work out which wall you clicked on when adding a corner. The maths
+    Used to work out which wall you clicked on when adding a corner. The math
     is a projection: how far along A-B does P land, clamped to the ends so the
     answer is always somewhere on the actual segment rather than out on the
     infinite line it sits on.
@@ -461,7 +461,7 @@ def square_points(size):
 
 
 def triangle_points(width, height):
-    """A triangle with its apex centred along the top edge."""
+    """A triangle with its apex centered along the top edge."""
     return [[width / 2, 0], [width, height], [0, height]]
 
 

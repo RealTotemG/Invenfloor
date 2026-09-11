@@ -281,7 +281,7 @@ class Inspector(QWidget):
             if not confirm(
                 self, "Delete room",
                 f"Delete '{room.name}'?\n\nIts containers go too. Items kept "
-                f"there lose that location, but stay in your catalogue."
+                f"there lose that location, but stay in your catalog."
             ):
                 return
             self.deletedRoom.emit(room)
@@ -314,7 +314,7 @@ class Inspector(QWidget):
         """Exact width and height boxes.
 
         The handles on the canvas are quicker, but if you know a room is four
-        metres across you want to type it, not nudge it.
+        meters across you want to type it, not nudge it.
         """
         _, _, width, height = room.bounds()
 
@@ -463,7 +463,7 @@ class Inspector(QWidget):
                 self, "Delete container",
                 f"Delete '{container.name}'?\n\nThe {len(contents)} item"
                 f"{'' if len(contents) == 1 else 's'} kept here stay in your "
-                f"catalogue -- they just lose this location."
+                f"catalog -- they just lose this location."
             ):
                 return
             self.deletedContainer.emit(container)

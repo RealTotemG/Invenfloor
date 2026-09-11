@@ -23,7 +23,7 @@ Two things live in this file:
 # ---------------------------------------------------------------------------
 # PALETTE
 # ---------------------------------------------------------------------------
-# Backgrounds, darkest to lightest. Layering a few near-black greys like this
+# Backgrounds, darkest to lightest. Layering a few near-black grays like this
 # (rather than using pure black everywhere) is most of what makes a dark UI
 # look considered instead of flat.
 BG_APP = "#0d0f14"        # the window itself
@@ -100,7 +100,7 @@ FONT_SIZE_SM = 11  # captions, tag chips
 FONT_SIZE_LG = 16  # section headings
 FONT_SIZE_XL = 22  # screen titles
 
-# Canvas behaviour. GRID_SIZE is the spacing of the fine grid in scene units,
+# Canvas behavior. GRID_SIZE is the spacing of the fine grid in scene units,
 # and also what room corners and containers snap to while you drag them.
 GRID_SIZE = 20
 GRID_MAJOR_EVERY = 5

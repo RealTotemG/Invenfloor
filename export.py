@@ -45,7 +45,7 @@ def export_items_csv(profile, path):
     """
     with open(path, "w", newline="", encoding="utf-8-sig") as handle:
         # utf-8-sig writes a byte-order mark. Excel on Windows needs it to
-        # realise the file is UTF-8; without it, accented characters and the
+        # realize the file is UTF-8; without it, accented characters and the
         # × sign come out as mojibake.
         writer = csv.writer(handle)
 
@@ -115,7 +115,7 @@ def export_floors_pdf(profile, path):
 
     # Room names are near-white so they read on the dark canvas. On paper that
     # would be invisible, so ask floor_items to use dark ink instead, and put
-    # it back afterwards even if something goes wrong on the way.
+    # it back afterward even if something goes wrong on the way.
     floor_items.PRINT_MODE = True
 
     try:

@@ -252,7 +252,7 @@ class ContainerItem(QGraphicsRectItem):
             # Keep the container inside its room's bounding box. Clamping to
             # the box rather than the exact polygon is a deliberate
             # simplification: it is predictable to use, and being able to nudge
-            # a drawer slightly into a corner notch is not worth the maths.
+            # a drawer slightly into a corner notch is not worth the math.
             left, top, width, height = self.room_item.room.bounds()
             max_x = left + width - self.container.w
             max_y = top + height - self.container.h
@@ -301,8 +301,8 @@ class ContainerItem(QGraphicsRectItem):
         painter.setPen(pen)
         painter.drawPath(path)
 
-        # Name, and how many items are inside, as one block centred in the
-        # box. Centring matters more than it sounds: a tall cupboard with its
+        # Name, and how many items are inside, as one block centered in the
+        # box. Centering matters more than it sounds: a tall cupboard with its
         # name pinned to the top and its count pinned to the bottom reads as
         # two unrelated labels rather than one thing.
         if self.container.w < 46 or self.container.h < 24:

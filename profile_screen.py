@@ -114,7 +114,7 @@ class ProfileCard(QFrame):
         ])
 
     def _apply_style(self, hovered):
-        """Cards tint towards their own color on hover.
+        """Cards tint toward their own color on hover.
 
         Written here rather than in theme.py's stylesheet because the color
         depends on the individual profile, which the global sheet can't know.
