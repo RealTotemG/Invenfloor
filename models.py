@@ -86,6 +86,55 @@ def new_id():
 
 
 # ---------------------------------------------------------------------------
+# NAMES
+# ---------------------------------------------------------------------------
+#
+# Two different limits, because they answer two different questions.
+#
+# NAME_MAX_LENGTH is what you are allowed to type. It exists to stop a name
+# running on forever, which is easy to do by accident when you paste something
+# in, and which used to push labels clean off the side of a room.
+#
+# NAME_DISPLAY_LENGTH is what fits on screen. Rooms, chips and list rows are
+# narrow, and a name that is legal to store is not automatically a name that
+# fits in a 90 pixel box. Anything longer gets cut with an ellipsis, and the
+# full name is still there in the tooltip and in the box you edit it in.
+#
+# Keeping them separate means "Upstairs hallway closet" is a perfectly good
+# name to have, it just shows as "Upstairs hallway c…" on the floor plan.
+
+NAME_MAX_LENGTH = 40
+NAME_DISPLAY_LENGTH = 20
+
+
+def clean_name(text, fallback="Untitled"):
+    """Tidy up a name a person typed, and cap its length.
+
+    Runs of whitespace collapse to one space, so a stray double space or a
+    pasted line break does not survive into the save file. An empty result
+    falls back rather than leaving something nameless on the floor plan.
+
+    Every path that accepts a typed name goes through here, including the
+    search box, so there is no way in that skips the cap.
+    """
+    text = " ".join(str(text).split())
+    return text[:NAME_MAX_LENGTH].strip() or fallback
+
+
+def short(text, limit=NAME_DISPLAY_LENGTH):
+    """The on-screen form of a name: at most `limit` characters.
+
+    The ellipsis counts toward the limit rather than being added on top, so
+    `limit` really is the widest this can ever be. That matters because the
+    whole point is fitting a known amount of space.
+    """
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit - 1].rstrip() + "…"
+
+
+# ---------------------------------------------------------------------------
 # TAG
 # ---------------------------------------------------------------------------
 

@@ -24,8 +24,10 @@ from floor_view import (
     FloorView, MODE_ADD_BOX, MODE_ADD_SHAPE, MODE_DRAW_ROOM, MODE_SELECT,
 )
 from inspector import Inspector
-from models import Floor, ROOM_PRESETS
-from widgets import NameColorDialog, button, confirm, divider, label
+from models import Floor, ROOM_PRESETS, short
+from widgets import (
+    ElidingLabel, NameColorDialog, button, confirm, divider, label,
+)
 
 STRIP_WIDTH = 190
 
@@ -147,7 +149,9 @@ class FloorStrip(QWidget):
 
         text = QVBoxLayout()
         text.setSpacing(0)
-        name = QLabel(floor.name)
+        name = ElidingLabel(short(floor.name))
+        if short(floor.name) != floor.name:
+            name.setToolTip(floor.name)
         name.setStyleSheet(f"color: {theme.TEXT}; background: transparent; "
                            f"border: none;")
         text.addWidget(name)
@@ -361,7 +365,8 @@ class LayoutSection(QWidget):
         self.current_index = index
         floor = self.profile.floors[index]
 
-        self._floor_label.setText(floor.name)
+        self._floor_label.setText(short(floor.name))
+        self._floor_label.setToolTip(floor.name)
         self.view.set_floor(self.profile, floor)
         self.view.fit_to_rooms()
         self.strip.set_profile(self.profile, index)
@@ -398,7 +403,8 @@ class LayoutSection(QWidget):
         if room is None:
             self._hint.setText("")
         else:
-            self._hint.setText(f"Working inside {room.name} · Esc to step out")
+            self._hint.setText(
+                f"Working inside {short(room.name)} · Esc to step out")
 
     def _rename_subject(self, subject):
         """Rename a room or a container from the canvas right-click menu.

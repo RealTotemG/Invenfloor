@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from models import Item, Placement
+from models import NAME_MAX_LENGTH, Item, Placement, clean_name, short
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +72,123 @@ def label(text, style=None):
     result = QLabel(text)
     if style:
         result.setObjectName(style)
+    return result
+
+
+def name_field(text="", placeholder="Give it a name"):
+    """A box for typing a name, with the length cap already on it.
+
+    Every name in the app is typed into one of these. Putting the cap here
+    instead of at each call site means a new name box cannot be added that
+    quietly forgets it, which is exactly how the old runaway names happened.
+    """
+    field = QLineEdit(text)
+    field.setPlaceholderText(placeholder)
+    field.setMaxLength(NAME_MAX_LENGTH)
+    return field
+
+
+class ElidingLabel(QLabel):
+    """A label that shortens its own text to whatever width it ends up with.
+
+    The 20 character rule gets a name most of the way there, but characters
+    are not all the same width and a narrow panel can still run out of room.
+    Twenty capital Ws are a lot wider than twenty i's. This does the last step
+    at the moment the width is actually known, which is the only point it can
+    be done properly.
+
+    The whole string is kept in fullText(), so nothing is really lost.
+    """
+
+    # Never squeeze narrower than this, or a chip in a tight row can end
+    # up as nothing but an ellipsis.
+    MIN_WIDTH = 48
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full = text
+        self._apply()
+
+    def setText(self, text):
+        self._full = text
+        self._apply()
+
+    def fullText(self):
+        return self._full
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply()
+
+    def minimumSizeHint(self):
+        """Say that this label is allowed to be squeezed.
+
+        A plain QLabel tells its layout it needs room for every character, so
+        the layout widens the panel rather than narrowing the label, and the
+        eliding above never gets a chance to run. That is what put a sideways
+        scrollbar under the tag list. MIN_WIDTH stops it disappearing
+        altogether.
+        """
+        hint = super().minimumSizeHint()
+        hint.setWidth(min(hint.width(), self.MIN_WIDTH))
+        return hint
+
+    def _apply(self):
+        width = self.contentsRect().width()
+        if width <= 0:
+            fitted = self._full         # no width yet, so nothing to fit to
+        else:
+            fitted = self.fontMetrics().elidedText(
+                self._full, Qt.ElideRight, width)
+
+        # Only touch the label when the result actually changed. setText asks
+        # the layout to reconsider, which can come back round as another
+        # resize, and without this guard that is a loop.
+        if fitted != super().text():
+            super().setText(fitted)
+
+
+def short_path(floor, room, container):
+    """A "Floor / Room / Container" line with every part shortened.
+
+    Each name gets the same 20 character allowance it would get on its own,
+    so one long room name cannot swallow the whole line.
+    """
+    return " / ".join(short(part.name) for part in (floor, room, container))
+
+
+def full_path(floor, room, container):
+    """The same line with nothing cut. For tooltips and anywhere exact."""
+    return " / ".join(part.name for part in (floor, room, container))
+
+
+def path_label(floor, room, container, style=None):
+    """A label for a container's full location, shortened, with a hover."""
+    display = short_path(floor, room, container)
+    complete = full_path(floor, room, container)
+    result = QLabel(display)
+    if style:
+        result.setObjectName(style)
+    if display != complete:
+        result.setToolTip(complete)
+    return result
+
+
+def short_label(text, style=None, limit=None):
+    """A label showing a shortened name, with the full one as its tooltip.
+
+    Nothing is ever lost, it just moves to the hover. Only sets a tooltip when
+    the text was actually cut, so hovering a name that fits shows nothing --
+    a tooltip repeating what is already on screen is just noise.
+    """
+    display = short(text) if limit is None else short(text, limit)
+    # An ElidingLabel rather than a plain one, so a name that passes the
+    # character limit but still will not fit its panel gives way too.
+    result = ElidingLabel(display)
+    if style:
+        result.setObjectName(style)
+    if display != text:
+        result.setToolTip(text)
     return result
 
 
@@ -339,7 +456,9 @@ def tag_chip(tag, small=False):
     Read-only -- it is how a tag looks anywhere it is displayed. Assigning
     tags is done through TagPickerDialog below.
     """
-    chip = QLabel(tag.name)
+    # Chips sit in a wrapping row, so a long tag name pushes every other chip
+    # onto its own line. Shortened here, full name on hover.
+    chip = short_label(tag.name)
     size = theme.FONT_SIZE_SM if small else theme.FONT_SIZE
     # 4px of vertical padding rather than 2: at 2px the descenders on letters
     # like g and y sat right on the border and looked shaved off.
@@ -444,8 +563,7 @@ class NameColorDialog(QDialog):
         layout.addWidget(label(title, "sectionTitle"))
 
         layout.addWidget(label(name_label, "caption"))
-        self._name_field = QLineEdit(name)
-        self._name_field.setPlaceholderText("Give it a name")
+        self._name_field = name_field(name)
         self._name_field.selectAll()
         layout.addWidget(self._name_field)
 
@@ -464,8 +582,14 @@ class NameColorDialog(QDialog):
         layout.addLayout(buttons)
 
     def result_values(self):
-        """The name (trimmed) and color the user chose."""
-        return self._name_field.text().strip(), self._picker.color()
+        """The name (tidied and capped) and color the user chose.
+
+        Returns an empty name for an empty box rather than inventing one, so
+        callers can still refuse to rename something to nothing.
+        """
+        typed = self._name_field.text()
+        return (clean_name(typed, fallback="") if typed.strip() else "",
+                self._picker.color())
 
 
 class TagPickerDialog(QDialog):
@@ -595,7 +719,10 @@ class PlaceRow(QWidget):
         self.container_field = QComboBox()
         for floor, room, container in profile.iter_containers():
             self.container_field.addItem(
-                f"{floor.name} / {room.name} / {container.name}", container.id)
+                short_path(floor, room, container), container.id)
+            self.container_field.setItemData(
+                self.container_field.count() - 1,
+                full_path(floor, room, container), Qt.ToolTipRole)
             if container.id == container_id:
                 self.container_field.setCurrentIndex(
                     self.container_field.count() - 1)
@@ -655,8 +782,7 @@ class ItemDialog(QDialog):
                                "sectionTitle"))
 
         layout.addWidget(label("Name", "caption"))
-        self._name_field = QLineEdit(item.name if item else "")
-        self._name_field.setPlaceholderText("What is it?")
+        self._name_field = name_field(item.name if item else "", "What is it?")
         layout.addWidget(self._name_field)
 
         layout.addWidget(label("Color", "caption"))
@@ -847,7 +973,7 @@ class ItemDialog(QDialog):
                       for container_id in order]
 
         return {
-            "name": self._name_field.text().strip(),
+            "name": clean_name(self._name_field.text(), fallback=""),
             "color": self._picker.color(),
             "placements": placements,
             "unfiled_quantity": self._unfiled_field.value(),
@@ -885,14 +1011,14 @@ def parse_bulk_line(text):
 
     match = QUANTITY_PATTERN.match(text)
     if match:
-        name = match.group(1).strip()
+        name = clean_name(match.group(1), fallback="")
         quantity = int(match.group(2))
         if name and quantity > 0:
             return name, quantity
         # "x3" on its own, or "Hammer x0" -- fall through and treat the whole
         # thing as a name rather than silently dropping it.
 
-    return text, 1
+    return clean_name(text, fallback="") or None, 1
 
 
 class BulkAddDialog(QDialog):
@@ -949,7 +1075,10 @@ class BulkAddDialog(QDialog):
 
         for floor, room, container in profile.iter_containers():
             self._container_field.addItem(
-                f"{floor.name} / {room.name} / {container.name}", container.id)
+                short_path(floor, room, container), container.id)
+            self._container_field.setItemData(
+                self._container_field.count() - 1,
+                full_path(floor, room, container), Qt.ToolTipRole)
 
         # Index 0 is the unfiled row, so anything past it is a real container.
         has_containers = self._container_field.count() > 1
@@ -1000,6 +1129,11 @@ class BulkAddDialog(QDialog):
         self._entry = QLineEdit()
         self._entry.setPlaceholderText("e.g. Phillips screwdriver   ·   "
                                        "Zip ties x50")
+
+        # A little longer than a plain name, because the line can carry a
+        # quantity on the end too. The name itself is still capped when the
+        # line is parsed.
+        self._entry.setMaxLength(NAME_MAX_LENGTH + 6)
         self._entry.returnPressed.connect(self._add_line)
         layout.addWidget(self._entry)
 

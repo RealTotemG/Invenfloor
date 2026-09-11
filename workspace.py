@@ -40,7 +40,8 @@ import storage
 import theme
 from items_section import ItemsSection
 from layout_section import LayoutSection
-from widgets import button, divider
+from models import short
+from widgets import ElidingLabel, button, divider
 
 SIDEBAR_WIDTH = 188
 SAVE_DELAY_MS = 500
@@ -143,7 +144,9 @@ class Workspace(QWidget):
         self._profile_dot.setFixedSize(10, 10)
         header.addWidget(self._profile_dot)
 
-        self._profile_name = QLabel("")
+        # The sidebar is only 188px wide, so this one needs the pixel
+        # fit on top of the character limit.
+        self._profile_name = ElidingLabel("")
         self._profile_name.setStyleSheet(
             f"font-size: {theme.FONT_SIZE_LG}px; font-weight: 600;")
         header.addWidget(self._profile_name, 1)
@@ -260,7 +263,8 @@ class Workspace(QWidget):
     def open_profile(self, profile):
         self.profile = profile
 
-        self._profile_name.setText(profile.name)
+        self._profile_name.setText(short(profile.name))
+        self._profile_name.setToolTip(profile.name)
         self._profile_dot.setStyleSheet(
             f"background-color: {profile.color}; border-radius: 5px;")
 

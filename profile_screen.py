@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 import storage
 import theme
 from models import Profile
-from widgets import NameColorDialog, button, label, confirm
+from widgets import NameColorDialog, button, label, confirm, short_label
 
 CARD_WIDTH = 260
 CARD_HEIGHT = 150
@@ -70,7 +70,7 @@ class ProfileCard(QFrame):
         layout.addWidget(stripe)
         layout.addSpacing(theme.SPACE_SM)
 
-        name = QLabel(profile.name)
+        name = short_label(profile.name)
         name.setStyleSheet(
             f"font-size: {theme.FONT_SIZE_LG}px; font-weight: 600; "
             f"color: {theme.TEXT}; background: transparent;")

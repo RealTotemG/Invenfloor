@@ -14,16 +14,16 @@ entirely without touching this file.
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QScrollArea, QFrame, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QFrame, QLabel,
     QSpinBox, QButtonGroup,
 )
 
 import theme
 from floor_items import EDIT_RESIZE, EDIT_VERTICES
-from models import Container, Item, Room
+from models import Container, Item, Room, short
 from widgets import (
     ColorPicker, ItemDialog, TagChipRow, TagPickerDialog, button, confirm,
-    divider, empty_state, label, wrapped,
+    divider, empty_state, label, name_field, short_label, wrapped,
 )
 
 PANEL_WIDTH = 320
@@ -143,8 +143,9 @@ class Inspector(QWidget):
         """The name box and color picker, identical for rooms and containers."""
         layout.addWidget(label(kind.upper(), "hint"))
 
-        name_field = QLineEdit(subject.name)
-        name_field.setPlaceholderText("Name")
+        # name_field() carries the length cap, so the box itself refuses
+        # anything longer and `rename` below can store what it is given.
+        name_box = name_field(subject.name, "Name")
 
         def rename(text):
             subject.name = text
@@ -152,8 +153,8 @@ class Inspector(QWidget):
 
         # textEdited fires only for typing, not when we set the text in code,
         # so this can never loop back on itself.
-        name_field.textEdited.connect(rename)
-        layout.addWidget(name_field)
+        name_box.textEdited.connect(rename)
+        layout.addWidget(name_box)
 
         layout.addSpacing(theme.SPACE_XS)
         layout.addWidget(label("Color", "caption"))
@@ -208,7 +209,7 @@ class Inspector(QWidget):
 
         text_column = QVBoxLayout()
         text_column.setSpacing(1)
-        name = QLabel(title)
+        name = short_label(title)
         name.setStyleSheet(f"color: {theme.TEXT};")
         text_column.addWidget(name)
         if subtitle:
@@ -416,7 +417,8 @@ class Inspector(QWidget):
         self._name_and_color(layout, "Container", container)
 
         if room is not None:
-            layout.addWidget(label(f"in {floor.name} / {room.name}", "hint"))
+            layout.addWidget(label(
+                f"in {short(floor.name)} / {short(room.name)}", "hint"))
 
         self._tags_block(layout, container, "container")
 

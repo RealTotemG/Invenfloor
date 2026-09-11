@@ -48,7 +48,8 @@ handles to stretch it into an oval is exactly right.
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
-    QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF,
+    QBrush, QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen,
+    QPolygonF,
 )
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsPolygonItem,
@@ -56,6 +57,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
+from models import short
 
 # Flipped on by export.py while rendering a PDF. The room and container
 # labels are near-white so they read on the dark canvas; on paper that is
@@ -322,9 +324,17 @@ class ContainerItem(QGraphicsRectItem):
             name_rect = QRectF(text_left, middle - 8, text_width, 16)
             count_rect = None
 
-        painter.setFont(canvas_font(11, bold=True))
+        font = canvas_font(11, bold=True)
+        painter.setFont(font)
         painter.setPen(QPen(qcolor(color, 1.0)))
-        painter.drawText(name_rect, Qt.AlignCenter, self.container.name)
+
+        # Two cuts, and they catch different things. short() enforces the
+        # app-wide 20 character rule, then elidedText fits whatever is left
+        # into this particular box, which may be much narrower than 20
+        # characters of this font. A small drawer needs both.
+        name = QFontMetricsF(font).elidedText(
+            short(self.container.name), Qt.ElideRight, name_rect.width())
+        painter.drawText(name_rect, Qt.AlignCenter, name)
 
         if count_rect is not None:
             painter.setFont(canvas_font(10))
@@ -677,20 +687,34 @@ class RoomItem(QGraphicsPolygonItem):
             return
 
         name_rect = QRectF(left, top - LABEL_MARGIN + 2, width, 15)
-        painter.setFont(canvas_font(12, bold=True))
+
+        # The counts sit right-aligned in this same strip, so work out how
+        # much room they need first and keep the name out of it. Otherwise a
+        # long name runs straight through "3c · 12i" and both become unreadable.
+        summary = ""
+        summary_width = 0.0
+        if width >= 90:
+            container_count = len(self.room.containers)
+            item_count = len(self.profile.items_in_room(self.room))
+            summary = f"{container_count}c · {item_count}i"
+            summary_width = QFontMetricsF(
+                canvas_font(10)).horizontalAdvance(summary) + 8
+
+        name_font = canvas_font(12, bold=True)
+        painter.setFont(name_font)
         ink = theme.BG_APP if PRINT_MODE else theme.TEXT
         painter.setPen(QPen(qcolor(ink, 0.95)))
-        painter.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
-                         self.room.name)
 
-        # Only worth showing the counts when there is enough width for them
-        # not to collide with the name.
-        if width < 90:
+        # short() applies the app-wide character limit; elidedText then fits
+        # the result to this room's actual width, which is the part that stops
+        # a name hanging off the side of a narrow room.
+        name = QFontMetricsF(name_font).elidedText(
+            short(self.room.name), Qt.ElideRight,
+            max(name_rect.width() - summary_width, 10))
+        painter.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
+
+        if not summary:
             return
-
-        container_count = len(self.room.containers)
-        item_count = len(self.profile.items_in_room(self.room))
-        summary = f"{container_count}c · {item_count}i"
 
         painter.setFont(canvas_font(10))
         painter.setPen(QPen(qcolor(color, 0.85)))

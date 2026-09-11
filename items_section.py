@@ -38,10 +38,11 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from models import Item, Tag
+from models import NAME_MAX_LENGTH, Item, Tag, clean_name, short
 from widgets import (
     BulkAddDialog, ItemDialog, NameColorDialog, TagChipRow, button, confirm,
-    empty_state, label, tag_chip, wrapped,
+    empty_state, full_path, label, path_label, short_label, short_path,
+    tag_chip, wrapped,
 )
 
 TAG_PANEL_WIDTH = 270
@@ -119,6 +120,9 @@ class ItemsSection(QWidget):
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search items…   (Ctrl+F)")
         self._search.setFixedWidth(250)
+        # Capped like a name box, because the Create button turns
+        # whatever is in here into an item name.
+        self._search.setMaxLength(NAME_MAX_LENGTH)
         # textChanged fires on every keystroke, which is what makes the list
         # filter as you type rather than when you press Enter.
         self._search.textChanged.connect(self._on_search)
@@ -185,7 +189,7 @@ class ItemsSection(QWidget):
             self._create_button.hide()
             return
 
-        self._create_button.setText(f'Create "{typed}"')
+        self._create_button.setText(f'Create "{short(typed)}"')
         self._create_button.show()
 
     def _create_from_search(self):
@@ -203,7 +207,7 @@ class ItemsSection(QWidget):
                for i in self.profile.items):
             return
 
-        item = Item(name=typed, color=theme.SWATCHES[-1])
+        item = Item(name=clean_name(typed), color=theme.SWATCHES[-1])
         if self.active_tag_id:
             item.tag_ids = [self.active_tag_id]
 
@@ -557,7 +561,7 @@ class ItemsSection(QWidget):
                 "No room carries this tag yet. Tag a room in the Layout view "
                 "to say that this is where these things belong.")
         else:
-            note = QLabel(", ".join(f"{floor.name} / {room.name}"
+            note = QLabel(", ".join(f"{short(floor.name)} / {short(room.name)}"
                                     for floor, room in rooms))
         wrapped(note)
         note.setStyleSheet(
@@ -589,7 +593,7 @@ class ItemsSection(QWidget):
         # -- title line
         title_row = QHBoxLayout()
         title_row.setSpacing(theme.SPACE_SM)
-        name = QLabel(item.name)
+        name = short_label(item.name)
         name.setStyleSheet(f"color: {theme.TEXT}; font-weight: 600;")
         title_row.addWidget(name)
 
@@ -656,8 +660,8 @@ class ItemsSection(QWidget):
         layout.setContentsMargins(theme.SPACE_MD, 0, 0, 0)
         layout.setSpacing(theme.SPACE_SM)
 
-        text = QLabel(f"{floor.name} / {room.name} / {container.name}   "
-                      f"×{quantity}")
+        text = QLabel(f"{short_path(floor, room, container)}   ×{quantity}")
+        text.setToolTip(full_path(floor, room, container))
         text.setStyleSheet(
             f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(text)
@@ -667,7 +671,7 @@ class ItemsSection(QWidget):
         layout.addWidget(button(
             "Find", "ghost",
             lambda: self.locateRequested.emit(container.id),
-            f"Show {container.name} on the floor plan", size="sm"))
+            f"Show {short(container.name)} on the floor plan", size="sm"))
         layout.addStretch()
 
         return line
@@ -683,7 +687,7 @@ class ItemsSection(QWidget):
 
         if len(places) == 1:
             floor, room, container, _ = places[0]
-            single = QLabel(f"{floor.name} / {room.name} / {container.name}")
+            single = path_label(floor, room, container)
             single.setStyleSheet(
                 f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
             return single

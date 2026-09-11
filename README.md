@@ -193,6 +193,18 @@ to break, so nothing gets reported against it.
 **Par levels.** Set "tell me when the total drops below" on an item and it gets
 a LOW badge and turns up in the Low stock view. Zero means never warn me.
 
+**Name lengths.** Two different limits, because they answer two different
+questions. You can type up to 40 characters, which stops a name running on
+forever. On screen a name shows at most 20 characters and then an ellipsis,
+because a room label is not 40 characters wide. The full name is still in the
+box you edit it in, on hover, and in the exports.
+
+Characters are not all the same width, though, so 20 of them can still be too
+many for a narrow drawer or the sidebar. Those places fit the text to the
+actual space on top of the character limit, which is why there's an
+`ElidingLabel` in `widgets.py` and a `QFontMetricsF` in the canvas painting.
+The character rule is predictable, the pixel fit is correct, and you want both.
+
 **Exporting.** Export at the bottom of the sidebar writes a CSV of everything
 you own, or a PDF of your floor plans with one page per floor. The plans are
 drawn by the same code that draws them on screen, so the printout can't drift
