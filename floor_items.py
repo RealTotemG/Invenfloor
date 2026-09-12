@@ -594,6 +594,12 @@ class RoomItem(QGraphicsPolygonItem):
                             max(height, MIN_ROOM_SIZE), left, top)
         self._apply_polygon()
         self._clamp_containers()
+
+        # Say so straight away rather than waiting for the mouse to come up.
+        # This runs on every step of a drag, so the inspector's W and H count
+        # along with the handle instead of showing a stale size until you
+        # click somewhere else and back.
+        self.editor.notify_resized(self.room)
         self.sync_handles()
         self.update()
 

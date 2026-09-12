@@ -111,7 +111,12 @@ polygon like any other, and you can drag its corners about.
 Dragging one stretches the whole room but keeps its shape, so an oval stays an
 oval and an L keeps its notch. Containers get pulled back inside if you shrink
 the room past them. There are W and H boxes in the inspector if you'd rather
-type an exact size.
+type an exact size, and they count along with the handle while you drag, so
+you can watch the numbers rather than guessing and checking.
+
+That live update goes through its own signal rather than the one that triggers
+an autosave. It fires on every mouse move, and dragging a room across the floor
+should write the file once at the end, not eighty times on the way.
 
 Switch to "Edit shape" and it becomes a genuinely different mode. You get round
 handles on every corner, the room locks in place so a drag on the body means

@@ -212,6 +212,7 @@ class LayoutSection(QWidget):
         self.inspector = Inspector()
         self.inspector.dataChanged.connect(self._on_inspector_changed)
         self.inspector.focusRoomRequested.connect(self._focus_room)
+        self.view.roomResized.connect(self.inspector.room_resized)
         self.inspector.resizeRoomRequested.connect(self._resize_room)
         self.inspector.editModeChanged.connect(self.view.set_room_edit_mode)
         self.inspector.deletedRoom.connect(self._delete_room)

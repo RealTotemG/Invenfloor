@@ -12,7 +12,7 @@ panel has no idea the canvas exists, and you could put it somewhere else
 entirely without touching this file.
 """
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QFrame, QLabel,
     QSpinBox, QButtonGroup,
@@ -26,7 +26,7 @@ from widgets import (
     divider, empty_state, label, name_field, short_label, wrapped,
 )
 
-PANEL_WIDTH = 320
+PANEL_WIDTH = 300
 
 
 class Inspector(QWidget):
@@ -46,6 +46,10 @@ class Inspector(QWidget):
         self.profile = None
         self.selection = None
         self.edit_mode = EDIT_RESIZE
+        # The two size boxes, when a room is showing. See room_resized().
+        self._width_field = None
+        self._height_field = None
+        self._sized_room = None
         # Which room the canvas is currently focused on, if any. The inspector
         # has no way to find this out for itself, so the layout screen tells it.
         self.focused_room_id = None
@@ -56,6 +60,11 @@ class Inspector(QWidget):
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
+        # The panel is a fixed width, so there is nowhere sideways to
+        # scroll TO. Left on, Qt puts a bar along the bottom the moment
+        # one widget asks for a pixel more than the column has, which
+        # reads as a bug rather than as an offer.
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         outer.addWidget(self._scroll, 1)
 
         self.show_selection(None)
@@ -93,12 +102,20 @@ class Inspector(QWidget):
         the panel can never show a stale name or the wrong color.
         """
         self.selection = selection
+        # Dropped now and set again by _size_block if a room is showing.
+        self._width_field = None
+        self._height_field = None
+        self._sized_room = None
 
         body = QWidget()
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_LG,
-                                  theme.SPACE_LG, theme.SPACE_LG)
-        layout.setSpacing(theme.SPACE_MD)
+        layout.setContentsMargins(theme.SPACE_MD, theme.SPACE_MD,
+                                  theme.SPACE_MD, theme.SPACE_MD)
+        # Tight by default, with the blocks below adding their own space
+        # where a section actually changes. At SPACE_MD every single
+        # widget sat 12px from the next, including a caption and the box
+        # it labels, and the gaps added up to more than the content.
+        layout.setSpacing(theme.SPACE_XS)
 
         if isinstance(selection, Room):
             self._build_room(layout, selection)
@@ -197,8 +214,12 @@ class Inspector(QWidget):
             }}
         """)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(theme.SPACE_SM, theme.SPACE_SM,
-                                      theme.SPACE_SM, theme.SPACE_SM)
+        # Tighter top and bottom than the sides. These rows stack, so
+        # every pixel of vertical padding is paid for once per
+        # container, and a long list is what pushes the panel into
+        # scrolling.
+        row_layout.setContentsMargins(theme.SPACE_SM, theme.SPACE_XS,
+                                      theme.SPACE_SM, theme.SPACE_XS)
         row_layout.setSpacing(theme.SPACE_SM)
 
         dot = QFrame()
@@ -327,6 +348,13 @@ class Inspector(QWidget):
         width_field = QSpinBox()
         height_field = QSpinBox()
 
+        # Kept on the inspector so room_resized() below can update them while
+        # a handle is being dragged. They are rebuilt with the panel, so these
+        # never point at a widget that has gone.
+        self._width_field = width_field
+        self._height_field = height_field
+        self._sized_room = room
+
         for field, value in ((width_field, width), (height_field, height)):
             field.setRange(40, 4000)
             field.setSingleStep(theme.GRID_SIZE)
@@ -353,6 +381,27 @@ class Inspector(QWidget):
         row.addWidget(height_label)
         row.addWidget(height_field, 1)
         layout.addLayout(row)
+
+    def room_resized(self, room):
+        """The canvas resized a room. Catch the two boxes up.
+
+        Called on every step of a handle drag, so it does the smallest thing
+        that works: set two numbers. Rebuilding the panel here would throw
+        away the widgets being interacted with, dozens of times a second.
+
+        Signals are blocked while setting the values, because setValue fires
+        valueChanged, which would come straight back as another resize
+        request for the size we already have.
+        """
+        if room is not self._sized_room or self._width_field is None:
+            return
+
+        _, _, width, height = room.bounds()
+        for field, value in ((self._width_field, width),
+                             (self._height_field, height)):
+            field.blockSignals(True)
+            field.setValue(int(round(value)))
+            field.blockSignals(False)
 
     def _shape_mode_block(self, layout):
         """The Resize / Edit shape switch.
@@ -417,6 +466,7 @@ class Inspector(QWidget):
         self._name_and_color(layout, "Container", container)
 
         if room is not None:
+            layout.addSpacing(theme.SPACE_XS)
             layout.addWidget(label(
                 f"in {short(floor.name)} / {short(room.name)}", "hint"))
 

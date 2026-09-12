@@ -67,6 +67,7 @@ class FloorView(QGraphicsView):
     renameRequested = Signal(object)     # a Room or a Container
     addItemRequested = Signal(object)    # a Container
     editModeChanged = Signal(str)        # which handles rooms are showing
+    roomResized = Signal(object)         # a Room, mid-drag as well as after
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -244,6 +245,17 @@ class FloorView(QGraphicsView):
     def notify_changed(self):
         """Called by the shapes when they are dragged. Triggers an autosave."""
         self.dataChanged.emit()
+
+    def notify_resized(self, room):
+        """Called by a room every time its size changes, including partway
+        through a drag.
+
+        Deliberately separate from notify_changed. This one fires on every
+        mouse move while a handle is held, so it must not drag an autosave
+        along with it -- that would write the file dozens of times crossing
+        the floor. It only tells whoever is displaying the size to catch up.
+        """
+        self.roomResized.emit(room)
 
     # -- modes ---------------------------------------------------------------
 
