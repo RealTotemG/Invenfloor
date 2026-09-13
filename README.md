@@ -162,6 +162,49 @@ stop moving it.
 **Containers.** Pick Add container and drag a box inside a room. You can't drag
 one on empty canvas, on purpose.
 
+Double-click into a room to work inside it and containers wake up. They follow
+the same Move and Resize switch rooms do: drag the body in Move, drag the edge
+handles in Resize. There are W and H boxes in the inspector too, and they track
+a drag the same way a room's do. A container is clamped to its room, so you
+can't stretch a drawer out through a wall.
+
+Edit shape leaves containers alone. A container is a rectangle and has no
+outline to edit, so that mode is about the room it sits in.
+
+**Tiers.** A container can be divided into tiers, for a shelf with levels. Add
+tier in the container panel, as many as you need, and items can then say which
+tier they're on: tier 1 shoes, tier 2 chargers, all still in the one shelf in
+the one room. The Items screen reads `Hallway / Shoe shelf, Tier 2`.
+
+**Moving things between tiers.** Every item row in a tiered container has a
+Move button. It asks how many and which tier, so six pairs of shoes can go four
+on tier 1 and two on tier 3 in two moves. Moving onto a tier that already has
+some adds to it rather than replacing it, and moving to "loose in the
+container" takes something back off its tier.
+
+The quantity is the reason this isn't drag and drop. Dragging a row somewhere
+says *move this*, and it has no way to say *move two of these*, which is the
+thing you actually want on a shelf. It's also a 300px panel that scrolls, so
+dragging to a heading that's scrolled off screen would be a fight.
+
+Four decisions worth defending:
+
+Tiers are a count, not a list of named things. A shelf's tiers don't have
+names, they have positions, and "Tier 2" already says everything there is to
+say. No naming, no color coding, nothing to maintain.
+
+Items can still sit loose in a tiered container. Adding tiers moves nothing,
+and anything not on a tier shows as just the container name. You file things
+into tiers when you feel like it rather than being made to.
+
+Removing a tier doesn't throw anything away. Items on the tier that goes come
+back to the container itself, because you still own them and they're still in
+that cupboard. You just stopped dividing it up.
+
+The same item can be on two tiers of one shelf. Shoes on tier 1 and shoes on
+tier 3 are two honest facts, and a placement is keyed by container AND tier, so
+both are recordable.
+
 **Right-click anywhere on the canvas** and you get a menu for whatever is under
 the cursor. On empty space it offers Add room, with Draw room and Preset shape
 underneath it. On a room you get Add container here, the work-inside toggle,
@@ -197,6 +240,16 @@ was to put it somewhere wrong first.
 This one matters more than it looks. The thing that kills an inventory app is
 the first two hundred items. If every one costs you a dialog and six fields,
 you give up around twenty.
+
+**Editing tags.** The panel down the left of the Items screen handles one tag
+at a time, which is right when you're adding one. Tidying up a whole vocabulary
+is a different job, so Edit tags in the toolbar opens all of them at once with
+new, rename, recolor and delete in one window, and a count of what each tag is
+actually on.
+
+That dialog doesn't implement any of those three. They already exist on the
+Items screen and get handed in as callbacks, so there's one implementation
+rather than two that can drift apart.
 
 **Create from search.** Search for something you don't own yet and a Create
 button appears next to the box. The new item comes pre-named, and pre-tagged

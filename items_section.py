@@ -40,9 +40,10 @@ from PySide6.QtWidgets import (
 import theme
 from models import NAME_MAX_LENGTH, Item, Tag, clean_name, short
 from widgets import (
-    BulkAddDialog, ItemDialog, NameColorDialog, TagChipRow, button, confirm,
+    BulkAddDialog, ItemDialog, NameColorDialog, TagChipRow,
+    TagManagerDialog, button, confirm,
     empty_state, full_path, label, path_label, short_label, short_path,
-    tag_chip, wrapped,
+    tag_chip, tier_suffix, wrapped,
 )
 
 TAG_PANEL_WIDTH = 270
@@ -153,6 +154,8 @@ class ItemsSection(QWidget):
 
         layout.addStretch()
 
+        layout.addWidget(button("Edit tags", "ghost", self.edit_tags,
+                                "Manage every tag in this profile"))
         layout.addWidget(button("Add many", "ghost", self.bulk_add,
                                 "Add a lot of items quickly  (Ctrl+B)"))
         layout.addWidget(button("+ New item", "primary", self.new_item,
@@ -627,9 +630,9 @@ class ItemsSection(QWidget):
 
         # -- the per-place breakdown, when expanded
         if len(places) > 1 and item.id in self.expanded_ids:
-            for floor, room, container, quantity in places:
+            for floor, room, container, quantity, tier in places:
                 middle.addWidget(self._place_line(
-                    floor, room, container, quantity))
+                    floor, room, container, quantity, tier))
 
         tags = self.profile.tags_for(item.tag_ids)
         if tags:
@@ -652,7 +655,7 @@ class ItemsSection(QWidget):
 
         return row
 
-    def _place_line(self, floor, room, container, quantity):
+    def _place_line(self, floor, room, container, quantity, tier=0):
         """One line of an expanded breakdown, with its own Find button."""
         line = QWidget()
         line.setObjectName("plain")
@@ -660,8 +663,9 @@ class ItemsSection(QWidget):
         layout.setContentsMargins(theme.SPACE_MD, 0, 0, 0)
         layout.setSpacing(theme.SPACE_SM)
 
-        text = QLabel(f"{short_path(floor, room, container)}   ×{quantity}")
-        text.setToolTip(full_path(floor, room, container))
+        text = QLabel(f"{short_path(floor, room, container)}"
+                      f"{tier_suffix(tier)}   ×{quantity}")
+        text.setToolTip(full_path(floor, room, container) + tier_suffix(tier))
         text.setStyleSheet(
             f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(text)
@@ -686,8 +690,12 @@ class ItemsSection(QWidget):
             return unfiled
 
         if len(places) == 1:
-            floor, room, container, _ = places[0]
+            floor, room, container, _, tier = places[0]
             single = path_label(floor, room, container)
+            if tier:
+                single.setText(single.text() + tier_suffix(tier))
+                single.setToolTip(full_path(floor, room, container)
+                                  + tier_suffix(tier))
             single.setStyleSheet(
                 f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
             return single
@@ -761,6 +769,20 @@ class ItemsSection(QWidget):
         self.profile.items.remove(item)
         self.expanded_ids.discard(item.id)
         self.dataChanged.emit()
+        self.reload()
+
+    def edit_tags(self):
+        """Open the whole tag vocabulary in one window.
+
+        The left panel can already do all three things one at a time, so this
+        hands those same methods to the dialog rather than writing them again.
+        One implementation, two ways in.
+        """
+        dialog = TagManagerDialog(self, self.profile,
+                                  on_add=self._add_tag,
+                                  on_edit=self._edit_tag,
+                                  on_delete=self._delete_tag)
+        dialog.exec()
         self.reload()
 
     def _add_tag(self):

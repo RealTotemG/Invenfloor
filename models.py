@@ -169,23 +169,37 @@ class Tag:
 
 @dataclass
 class Placement:
-    """"This many of this item, in this container."
+    """"This many of this item, in this container, on this tier."
 
     A tiny class, but giving it a name is what makes the rest of the app
     readable: "item.placements" says what it is far better than a dictionary
     of container ids to numbers would.
+
+    `tier` is 0 for "just in the container", and 1, 2, 3... for a shelf with
+    tiers. Zero rather than None because it is a number either way and there
+    is no arithmetic to guard: tier 0 sorts first, which is where loose things
+    belong in a list.
+
+    The same item CAN appear twice in one container on different tiers. Shoes
+    on tier 1 and shoes on tier 3 are two honest facts, so nothing stops you
+    recording both.
     """
     container_id: str
     quantity: int = 1
+    tier: int = 0
 
     def to_dict(self):
-        return {"container_id": self.container_id, "quantity": self.quantity}
+        return {"container_id": self.container_id, "quantity": self.quantity,
+                "tier": self.tier}
 
     @staticmethod
     def from_dict(raw):
         return Placement(
             container_id=raw.get("container_id"),
             quantity=raw.get("quantity", 1),
+            # Saved before tiers existed means no tier, which is exactly what
+            # zero means.
+            tier=max(int(raw.get("tier", 0)), 0),
         )
 
 
@@ -233,12 +247,23 @@ class Item:
             return sum(p.quantity for p in self.placements)
         return self.unfiled_quantity
 
-    def placement_in(self, container_id):
-        """The placement in one specific container, or None."""
+    def placement_in(self, container_id, tier=None):
+        """The placement in one container, or None.
+
+        `tier=None` means "on any tier", which is what you want when asking
+        "is this in that drawer at all". Pass a number to mean that tier
+        exactly, including 0 for the untiered part of the container.
+        """
         for placement in self.placements:
-            if placement.container_id == container_id:
+            if placement.container_id != container_id:
+                continue
+            if tier is None or placement.tier == tier:
                 return placement
         return None
+
+    def placements_in(self, container_id):
+        """Every placement in one container, one per tier it is kept on."""
+        return [p for p in self.placements if p.container_id == container_id]
 
     def is_unfiled(self):
         return len(self.placements) == 0
@@ -321,11 +346,25 @@ class Container:
     h: float = 60.0
     tag_ids: list = field(default_factory=list)
 
+    # How many tiers this container is divided into. Zero means it is just a
+    # box, which is the right default: most drawers are not shelves. A three
+    # tier shelf sets this to 3 and its items can then say which tier they
+    # are on.
+    #
+    # Deliberately just a count. Tiers are not named or colored, because a
+    # shelf's tiers do not have names, they have positions.
+    tier_count: int = 0
+
+    def tiers(self):
+        """1, 2, 3... for a tiered container. Empty for a plain one."""
+        return range(1, self.tier_count + 1)
+
     def to_dict(self):
         return {
             "id": self.id, "name": self.name, "color": self.color,
             "x": self.x, "y": self.y, "w": self.w, "h": self.h,
             "tag_ids": list(self.tag_ids),
+            "tier_count": self.tier_count,
         }
 
     @staticmethod
@@ -337,6 +376,9 @@ class Container:
             x=raw.get("x", 0.0), y=raw.get("y", 0.0),
             w=raw.get("w", 80.0), h=raw.get("h", 60.0),
             tag_ids=list(raw.get("tag_ids", [])),
+            # No key means a plain box, which is what every container was
+            # before tiers existed.
+            tier_count=max(int(raw.get("tier_count", 0)), 0),
         )
 
 
@@ -714,15 +756,16 @@ class Profile:
     def locations_of(self, item):
         """Every place this item is kept.
 
-        Returns a list of (floor, room, container, quantity). Placements whose
-        container has been deleted are skipped, so this can be shorter than
-        item.placements.
+        Returns a list of (floor, room, container, quantity, tier). Placements
+        whose container has been deleted are skipped, so this can be shorter
+        than item.placements.
         """
         found = []
         for placement in item.placements:
             floor, room, container = self.find_container(placement.container_id)
             if container is not None:
-                found.append((floor, room, container, placement.quantity))
+                found.append((floor, room, container, placement.quantity,
+                              placement.tier))
         return found
 
     def location_of(self, item):
@@ -736,22 +779,36 @@ class Profile:
         if not places:
             return "Unfiled"
         if len(places) == 1:
-            floor, room, container, _ = places[0]
-            return f"{floor.name} / {room.name} / {container.name}"
+            floor, room, container, _, tier = places[0]
+            tail = f" · Tier {tier}" if tier else ""
+            return f"{floor.name} / {room.name} / {container.name}{tail}"
         return f"{len(places)} places"
 
-    def contents_of(self, container_id):
-        """What is in one container, as a list of (item, quantity)."""
+    def contents_of(self, container_id, tier=None):
+        """What is in one container, as a list of (item, quantity, tier).
+
+        One row per PLACEMENT, not per item, because an item can sit on two
+        tiers of the same shelf and both are worth showing. Sorted by tier so
+        anything loose in the container comes first, then tier 1 downward.
+
+        `tier=None` asks for everything. Pass a number for one tier only,
+        including 0 for the part of the container that has no tier.
+        """
         found = []
         for item in self.items:
-            placement = item.placement_in(container_id)
-            if placement is not None:
-                found.append((item, placement.quantity))
+            for placement in item.placements_in(container_id):
+                if tier is None or placement.tier == tier:
+                    found.append((item, placement.quantity, placement.tier))
+        found.sort(key=lambda row: (row[2], row[0].name.lower()))
         return found
 
     def item_count_in_container(self, container_id):
-        """How many DIFFERENT items are in a container (not how many units)."""
-        return len(self.contents_of(container_id))
+        """How many DIFFERENT items are in a container (not how many units).
+
+        Counted by item, so a thing kept on two tiers of the same shelf is
+        still one thing in that shelf.
+        """
+        return len({item.id for item, _, _ in self.contents_of(container_id)})
 
     def items_in_room(self, room):
         """Every distinct item with at least one placement in this room.
@@ -799,7 +856,7 @@ class Profile:
             if not places:
                 continue
 
-            rooms_it_is_in = [room for _, room, _, _ in places]
+            rooms_it_is_in = [room for _, room, _, _, _ in places]
 
             for tag_id in item.tag_ids:
                 expected = [room for _, room in self.rooms_with_tag(tag_id)]
@@ -834,13 +891,16 @@ class Profile:
 
     # -- changing things ----------------------------------------------------
 
-    def set_placement(self, item, container_id, quantity):
-        """Put (or update) a quantity of an item in a container.
+    def set_placement(self, item, container_id, quantity, tier=0):
+        """Put (or update) a quantity of an item in a container, on a tier.
 
         A quantity of zero or less removes the placement, which is what makes
         "I've used them all up" the same gesture as "wrong drawer".
+
+        Matches on container AND tier, so putting shoes on tier 3 does not
+        overwrite the shoes already on tier 1.
         """
-        existing = item.placement_in(container_id)
+        existing = item.placement_in(container_id, tier)
 
         if quantity <= 0:
             if existing is not None:
@@ -848,9 +908,56 @@ class Profile:
             return
 
         if existing is None:
-            item.placements.append(Placement(container_id, quantity))
+            item.placements.append(Placement(container_id, quantity, tier))
         else:
             existing.quantity = quantity
+
+    def move_to_tier(self, item, container_id, from_tier, to_tier, quantity):
+        """Move some of an item from one tier of a container to another.
+
+        Takes a quantity rather than moving the whole placement, because a
+        shelf's whole point is that four of a thing can be on one level and two
+        on another. Moving part of a stack leaves the rest where it was.
+
+        The destination is added to, never replaced: if there are already two
+        on tier 3 and you move two more there, tier 3 has four.
+        """
+        source = item.placement_in(container_id, from_tier)
+        if source is None or to_tier == from_tier:
+            return
+
+        quantity = min(max(int(quantity), 0), source.quantity)
+        if quantity <= 0:
+            return
+
+        source.quantity -= quantity
+        if source.quantity <= 0:
+            item.placements.remove(source)
+
+        destination = item.placement_in(container_id, to_tier)
+        if destination is None:
+            item.placements.append(
+                Placement(container_id, quantity, to_tier))
+        else:
+            destination.quantity += quantity
+
+        item.touch()
+
+    def set_tier_count(self, container, count):
+        """Change how many tiers a container has.
+
+        Removing tiers does not throw anything away. Items on a tier that no
+        longer exists come back to the container itself, which is the honest
+        answer: you still own them and they are still in that cupboard, you
+        just stopped dividing it up.
+        """
+        count = max(int(count), 0)
+        container.tier_count = count
+
+        for item in self.items:
+            for placement in item.placements_in(container.id):
+                if placement.tier > count:
+                    placement.tier = 0
 
     def delete_tag(self, tag_id):
         """Remove a tag, and strip it from everything that referenced it.

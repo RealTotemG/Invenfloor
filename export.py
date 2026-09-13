@@ -57,8 +57,10 @@ def export_items_csv(profile, path):
         for item in sorted(profile.items, key=lambda i: i.name.lower()):
             places = profile.locations_of(item)
             place_text = "; ".join(
-                f"{floor.name} / {room.name} / {container.name} x{quantity}"
-                for floor, room, container, quantity in places
+                f"{floor.name} / {room.name} / {container.name}"
+                + (f" Tier {tier}" if tier else "")
+                + f" x{quantity}"
+                for floor, room, container, quantity, tier in places
             ) or "Unfiled"
 
             tag_text = ", ".join(t.name for t in profile.tags_for(item.tag_ids))

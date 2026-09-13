@@ -215,6 +215,11 @@ class LayoutSection(QWidget):
         self.view.roomResized.connect(self.inspector.room_resized)
         self.inspector.resizeRoomRequested.connect(self._resize_room)
         self.inspector.lockChanged.connect(self._set_room_locked)
+        self.inspector.resizeContainerRequested.connect(
+            self._resize_container)
+        self.inspector.tierCountChanged.connect(self._set_tier_count)
+        self.view.containerResized.connect(
+            self.inspector.container_resized)
         self.inspector.editModeChanged.connect(self.view.set_room_edit_mode)
         self.inspector.deletedRoom.connect(self._delete_room)
         self.inspector.deletedContainer.connect(self._delete_container)
@@ -457,6 +462,27 @@ class LayoutSection(QWidget):
             self.show_floor(index)
 
         return self.view.reveal_container(container_id)
+
+    def _resize_container(self, container, width, height):
+        """The inspector's W/H boxes for a container.
+
+        Goes through the canvas item rather than writing the numbers here, so
+        the clamp that keeps a container inside its room runs either way.
+        """
+        for room_item in self.view.room_items:
+            for container_item in room_item.container_items:
+                if container_item.container.id == container.id:
+                    container_item.resize_to(container.x, container.y,
+                                             width, height)
+                    self.dataChanged.emit()
+                    return
+
+    def _set_tier_count(self, container, count):
+        """Add or remove a tier, then rebuild the panel to show it."""
+        self.profile.set_tier_count(container, count)
+        self.view.refresh()
+        self.inspector.show_selection(container)
+        self.dataChanged.emit()
 
     def _set_room_locked(self, room, locked):
         """Lock or unlock a room from the inspector.

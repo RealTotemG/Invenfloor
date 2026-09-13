@@ -22,7 +22,8 @@ import theme
 from floor_items import EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES
 from models import Container, Item, Room, short
 from widgets import (
-    ColorPicker, ItemDialog, TagChipRow, TagPickerDialog, button, confirm,
+    ColorPicker, ItemDialog, MoveToTierDialog, TagChipRow, TagPickerDialog,
+    button, confirm,
     WrappingRow, divider, empty_state, label, name_field, short_label,
     wrapped,
 )
@@ -39,6 +40,8 @@ class Inspector(QWidget):
     deletedContainer = Signal(object)
     resizeRoomRequested = Signal(object, float, float)   # room, width, height
     lockChanged = Signal(object, bool)                   # room, locked
+    resizeContainerRequested = Signal(object, float, float)  # container, w, h
+    tierCountChanged = Signal(object, int)               # container, tiers
     editModeChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -52,6 +55,7 @@ class Inspector(QWidget):
         self._width_field = None
         self._height_field = None
         self._sized_room = None
+        self._sized_container = None
         # Which room the canvas is currently focused on, if any. The inspector
         # has no way to find this out for itself, so the layout screen tells it.
         self.focused_room_id = None
@@ -122,10 +126,11 @@ class Inspector(QWidget):
         the panel can never show a stale name or the wrong color.
         """
         self.selection = selection
-        # Dropped now and set again by _size_block if a room is showing.
+        # Dropped now, and set again by whichever size block runs below.
         self._width_field = None
         self._height_field = None
         self._sized_room = None
+        self._sized_container = None
 
         body = QWidget()
         layout = QVBoxLayout(body)
@@ -226,7 +231,8 @@ class Inspector(QWidget):
 
         layout.addWidget(button("Edit tags", "ghost", edit_tags, size="sm"))
 
-    def _mini_row(self, color, title, subtitle, badge=None, on_click=None):
+    def _mini_row(self, color, title, subtitle, badge=None, on_click=None,
+                  extra=None):
         """A compact colored row used for the contents lists."""
         row = QFrame()
         row.setObjectName("card")
@@ -275,6 +281,9 @@ class Inspector(QWidget):
             count.setStyleSheet(
                 f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
             row_layout.addWidget(count)
+
+        if extra is not None:
+            row_layout.addWidget(extra)
 
         if on_click is not None:
             row_layout.addWidget(button("Edit", "ghost", on_click, size="sm"))
@@ -441,6 +450,138 @@ class Inspector(QWidget):
             field.setValue(int(round(value)))
             field.blockSignals(False)
 
+    def _container_size_block(self, layout, container):
+        """Exact width and height for a container.
+
+        The same idea as the room one above, and for the same reason: the
+        handles are quicker, but when you know a shelf is 60 wide you want to
+        type it. Clamped by the canvas, so a number too big for the room comes
+        back as the biggest that fits rather than being refused.
+        """
+        layout.addWidget(label("Size", "caption"))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.SPACE_SM)
+
+        width_field = QSpinBox()
+        height_field = QSpinBox()
+
+        self._width_field = width_field
+        self._height_field = height_field
+        self._sized_container = container
+
+        for field, value in ((width_field, container.w),
+                             (height_field, container.h)):
+            field.setRange(20, 4000)
+            field.setMinimumWidth(60)
+            field.setSingleStep(theme.GRID_SIZE)
+            field.blockSignals(True)
+            field.setValue(int(round(value)))
+            field.blockSignals(False)
+
+        def apply_size():
+            self.resizeContainerRequested.emit(
+                container, float(width_field.value()),
+                float(height_field.value()))
+
+        width_field.valueChanged.connect(apply_size)
+        height_field.valueChanged.connect(apply_size)
+
+        width_label = QLabel("W")
+        width_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
+        height_label = QLabel("H")
+        height_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
+
+        row.addWidget(width_label)
+        row.addWidget(width_field, 1)
+        row.addWidget(height_label)
+        row.addWidget(height_field, 1)
+        layout.addLayout(row)
+
+        hint = QLabel("Double-click the room to work inside it, then drag the "
+                      "handles in Resize mode.")
+        wrapped(hint)
+        hint.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(hint)
+
+    def container_resized(self, container):
+        """The canvas resized a container. Catch the two boxes up.
+
+        Same shape as room_resized: runs on every step of a drag, so it does
+        the smallest thing that works and blocks signals while doing it.
+        """
+        if container is not self._sized_container or self._width_field is None:
+            return
+
+        for field, value in ((self._width_field, container.w),
+                             (self._height_field, container.h)):
+            field.blockSignals(True)
+            field.setValue(int(round(value)))
+            field.blockSignals(False)
+
+    def _tiers_block(self, layout, container):
+        """Add tier / Remove tier, and what the tiers mean.
+
+        A count and two buttons. Tiers are not named or colored on purpose:
+        a shelf's tiers do not have names, they have positions, and "Tier 2"
+        already says everything there is to say.
+        """
+        layout.addSpacing(theme.SPACE_XS)
+        layout.addWidget(label("Tiers", "caption"))
+
+        if container.tier_count == 0:
+            note = QLabel("No tiers. Add some for a shelf or a unit with "
+                          "separate levels.")
+        else:
+            note = QLabel(f"{container.tier_count} tier"
+                          + ("" if container.tier_count == 1 else "s")
+                          + ". Items can sit on a tier, or loose in the "
+                            "container itself.")
+        wrapped(note)
+        note.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(note)
+
+        row = WrappingRow()
+        row.add(button("Add tier", "ghost", size="sm",
+                       tooltip="Divide this container into one more level",
+                       on_click=lambda: self.tierCountChanged.emit(
+                           container, container.tier_count + 1)))
+
+        if container.tier_count > 0:
+            row.add(button(
+                "Remove tier", "ghost", size="sm",
+                tooltip="Drop the last tier. Anything on it comes back to "
+                        "the container itself, nothing is lost.",
+                on_click=lambda: self._remove_tier(container)))
+
+        layout.addWidget(row)
+
+    def _move_to_tier(self, item, container, quantity, tier):
+        """Ask how many and where to, then move them."""
+        dialog = MoveToTierDialog(self, item, container, quantity, tier)
+        if not dialog.exec():
+            return
+
+        how_many, destination = dialog.result_values()
+        self.profile.move_to_tier(item, container.id, tier, destination,
+                                  how_many)
+        self.dataChanged.emit()
+        self.show_selection(container)
+
+    def _remove_tier(self, container):
+        """Drop the last tier, warning first if anything is on it."""
+        on_last = self.profile.contents_of(container.id, container.tier_count)
+        if on_last and not confirm(
+                self, "Remove tier",
+                f"Tier {container.tier_count} has {len(on_last)} item"
+                f"{'' if len(on_last) == 1 else 's'} on it.\n\n"
+                f"They stay in '{container.name}', they just stop being on a "
+                f"tier.", danger_text="Remove tier"):
+            return
+        self.tierCountChanged.emit(container, container.tier_count - 1)
+
     def _shape_mode_block(self, layout, room):
         """The Move / Resize / Edit shape switch.
 
@@ -542,6 +683,10 @@ class Inspector(QWidget):
             layout.addWidget(label(
                 f"in {short(floor.name)} / {short(room.name)}", "hint"))
 
+        layout.addSpacing(theme.SPACE_XS)
+        self._container_size_block(layout, container)
+        self._tiers_block(layout, container)
+
         self._tags_block(layout, container, "container")
 
         layout.addSpacing(theme.SPACE_SM)
@@ -557,7 +702,17 @@ class Inspector(QWidget):
                 f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
             layout.addWidget(hint)
         else:
-            for item, quantity in contents:
+            # Grouped by tier, loose things first. contents_of already sorts
+            # that way, so this just puts a heading in when the tier changes.
+            current_tier = None
+            for item, quantity, tier in contents:
+                if container.tier_count and tier != current_tier:
+                    current_tier = tier
+                    layout.addSpacing(theme.SPACE_XS)
+                    layout.addWidget(label(
+                        "Loose in the container" if tier == 0
+                        else f"Tier {tier}", "hint"))
+
                 # If the item is also kept elsewhere, say so -- otherwise the
                 # quantity here looks like the total and it is easy to think
                 # you own fewer than you do.
@@ -568,10 +723,20 @@ class Inspector(QWidget):
                                 + ("" if elsewhere == 1 else "s")
                                 + f" · {item.total_quantity()} in total")
 
+                move = None
+                if container.tier_count:
+                    move = button(
+                        "Move", "ghost", size="sm",
+                        tooltip="Move some or all of these to another tier",
+                        on_click=(lambda checked=False, i=item, q=quantity,
+                                  t=tier: self._move_to_tier(
+                                      i, container, q, t)))
+
                 layout.addWidget(self._mini_row(
                     item.color, item.name, subtitle,
                     badge=f"×{quantity}",
-                    on_click=lambda checked=False, i=item: self._edit_item(i)))
+                    on_click=lambda checked=False, i=item: self._edit_item(i),
+                    extra=move))
 
         layout.addSpacing(theme.SPACE_XS)
         layout.addWidget(button(

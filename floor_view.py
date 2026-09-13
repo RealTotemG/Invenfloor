@@ -79,6 +79,7 @@ class FloorView(QGraphicsView):
     addItemRequested = Signal(object)    # a Container
     editModeChanged = Signal(str)        # which handles rooms are showing
     roomResized = Signal(object)         # a Room, mid-drag as well as after
+    containerResized = Signal(object)    # a Container, mid-drag too
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -270,6 +271,10 @@ class FloorView(QGraphicsView):
         room_item.set_locked(locked)
         self.itemSelected.emit(room_item.room)   # redraw the inspector
         self.dataChanged.emit()
+
+    def notify_container_resized(self, container):
+        """Same idea as notify_resized, for a container being stretched."""
+        self.containerResized.emit(container)
 
     def notify_resized(self, room):
         """Called by a room every time its size changes, including partway

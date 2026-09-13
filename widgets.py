@@ -148,6 +148,31 @@ class ElidingLabel(QLabel):
             super().setText(fitted)
 
 
+def fill_container_choices(combo, profile, selected=None):
+    """Put every container in a dropdown, one row per tier.
+
+    A tiered shelf gets a row for the shelf itself and a row for each of its
+    tiers, so choosing a place is still one decision made in one control.
+    Each row's data is the pair (container_id, tier), and tier 0 means the
+    container itself.
+
+    `selected` is that same pair. Returns the number of rows added.
+    """
+    for floor, room, container in profile.iter_containers():
+        places = [0] + list(container.tiers())
+        for tier in places:
+            text = short_path(floor, room, container)
+            complete = full_path(floor, room, container)
+            if tier:
+                text += f" · Tier {tier}"
+                complete += f" · Tier {tier}"
+            combo.addItem(text, (container.id, tier))
+            combo.setItemData(combo.count() - 1, complete, Qt.ToolTipRole)
+            if selected is not None and (container.id, tier) == tuple(selected):
+                combo.setCurrentIndex(combo.count() - 1)
+    return combo.count()
+
+
 def short_path(floor, room, container):
     """A "Floor / Room / Container" line with every part shortened.
 
@@ -160,6 +185,15 @@ def short_path(floor, room, container):
 def full_path(floor, room, container):
     """The same line with nothing cut. For tooltips and anywhere exact."""
     return " / ".join(part.name for part in (floor, room, container))
+
+
+def tier_suffix(tier):
+    """" · Tier 2", or nothing at all for something not on a tier.
+
+    One function so every screen says it the same way, and so the day this
+    wording changes it changes everywhere at once.
+    """
+    return f" · Tier {tier}" if tier else ""
 
 
 def path_label(floor, room, container, style=None):
@@ -743,7 +777,8 @@ class PlaceRow(QWidget):
 
     removed = Signal(object)
 
-    def __init__(self, profile, container_id=None, quantity=1, parent=None):
+    def __init__(self, profile, container_id=None, quantity=1, tier=0,
+                 parent=None):
         super().__init__(parent)
 
         self.setObjectName("plain")
@@ -753,15 +788,9 @@ class PlaceRow(QWidget):
         layout.setSpacing(theme.SPACE_SM)
 
         self.container_field = QComboBox()
-        for floor, room, container in profile.iter_containers():
-            self.container_field.addItem(
-                short_path(floor, room, container), container.id)
-            self.container_field.setItemData(
-                self.container_field.count() - 1,
-                full_path(floor, room, container), Qt.ToolTipRole)
-            if container.id == container_id:
-                self.container_field.setCurrentIndex(
-                    self.container_field.count() - 1)
+        fill_container_choices(
+            self.container_field, profile,
+            None if container_id is None else (container_id, tier))
         layout.addWidget(self.container_field, 1)
 
         self.quantity_field = QSpinBox()
@@ -777,7 +806,7 @@ class PlaceRow(QWidget):
         layout.addWidget(remove)
 
     def values(self):
-        """(container_id, quantity) as the row currently stands."""
+        """((container_id, tier), quantity) as the row currently stands."""
         return self.container_field.currentData(), self.quantity_field.value()
 
 
@@ -892,7 +921,8 @@ class ItemDialog(QDialog):
         # Fill in the starting rows.
         if item is not None:
             for placement in item.placements:
-                self._add_row(placement.container_id, placement.quantity)
+                self._add_row(placement.container_id, placement.quantity,
+                              placement.tier)
         elif default_container_id is not None:
             self._add_row(default_container_id, 1)
 
@@ -931,8 +961,8 @@ class ItemDialog(QDialog):
         self._add_row(None, 1)
         self._refresh_places()
 
-    def _add_row(self, container_id, quantity):
-        row = PlaceRow(self._profile, container_id, quantity)
+    def _add_row(self, container_id, quantity, tier=0):
+        row = PlaceRow(self._profile, container_id, quantity, tier)
         row.removed.connect(self._remove_row)
         row.quantity_field.valueChanged.connect(self._update_total)
         self._rows.append(row)
@@ -997,16 +1027,20 @@ class ItemDialog(QDialog):
         order = []
 
         for row in self._rows:
-            container_id, quantity = row.values()
-            if container_id is None or quantity <= 0:
+            place, quantity = row.values()
+            if place is None or quantity <= 0:
                 continue
-            if container_id not in totals:
-                totals[container_id] = 0
-                order.append(container_id)
-            totals[container_id] += quantity
+            # Keyed by (container, tier), so the same shelf on two different
+            # tiers stays two rows, while the same tier twice gets added up.
+            place = tuple(place)
+            if place not in totals:
+                totals[place] = 0
+                order.append(place)
+            totals[place] += quantity
 
-        placements = [Placement(container_id, totals[container_id])
-                      for container_id in order]
+        placements = [Placement(container_id, totals[(container_id, tier)],
+                                tier)
+                      for container_id, tier in order]
 
         return {
             "name": clean_name(self._name_field.text(), fallback=""),
@@ -1055,6 +1089,217 @@ def parse_bulk_line(text):
         # thing as a name rather than silently dropping it.
 
     return clean_name(text, fallback="") or None, 1
+
+
+class MoveToTierDialog(QDialog):
+    """Move some or all of an item onto a different tier of one container.
+
+    WHY A QUANTITY
+    --------------
+    "Which tier are the shoes on" often has more than one answer. Four pairs on
+    tier 1 and two on tier 3 is a normal thing for a shelf to be, so this asks
+    how many to move rather than assuming the whole pile goes together. Move
+    twice and you have split them.
+
+    The destination list deliberately includes where they already are, greyed
+    out in wording rather than removed, so the list always reads the same way
+    and you can see the layout of the container while deciding.
+    """
+
+    def __init__(self, parent, item, container, quantity, tier):
+        super().__init__(parent)
+        self.setWindowTitle("Move to tier")
+        self.setMinimumWidth(380)
+        self._item = item
+        self._container = container
+        self._from_tier = tier
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(theme.SPACE_XL, theme.SPACE_XL,
+                                  theme.SPACE_XL, theme.SPACE_XL)
+        layout.setSpacing(theme.SPACE_MD)
+
+        layout.addWidget(label("Move to tier", "sectionTitle"))
+
+        where = ("loose in " + short(container.name)) if tier == 0 \
+            else f"on tier {tier} of {short(container.name)}"
+        intro = label(f"{short(item.name)} · {quantity} {where}.", "caption")
+        wrapped(intro)
+        layout.addWidget(intro)
+
+        layout.addWidget(label("How many", "caption"))
+        self._quantity_field = QSpinBox()
+        self._quantity_field.setRange(1, quantity)
+        self._quantity_field.setValue(quantity)
+        self._quantity_field.setToolTip(
+            "Leave it at the full amount to move the lot, or lower it to "
+            "split them across tiers.")
+        layout.addWidget(self._quantity_field)
+
+        layout.addWidget(label("Where to", "caption"))
+        self._tier_field = QComboBox()
+        for destination in [0] + list(container.tiers()):
+            text = ("Loose in the container" if destination == 0
+                    else f"Tier {destination}")
+            if destination == tier:
+                text += "   (where it is now)"
+            self._tier_field.addItem(text, destination)
+        # Land on the first destination that is not where it already is, so
+        # pressing straight through actually moves something.
+        for index in range(self._tier_field.count()):
+            if self._tier_field.itemData(index) != tier:
+                self._tier_field.setCurrentIndex(index)
+                break
+        layout.addWidget(self._tier_field)
+
+        note = QLabel("Anything already on the destination tier is added to, "
+                      "not replaced.")
+        wrapped(note)
+        note.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(note)
+
+        layout.addSpacing(theme.SPACE_SM)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(button("Cancel", "ghost", self.reject))
+        save = button("Move", "primary", self.accept)
+        save.setDefault(True)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+    def result_values(self):
+        """(how many, which tier). The tier can be 0 for loose."""
+        return self._quantity_field.value(), self._tier_field.currentData()
+
+
+class TagManagerDialog(QDialog):
+    """Every tag in the profile, in one place.
+
+    WHY THIS EXISTS
+    ---------------
+    Tags could already be made and edited from the panel down the left of the
+    Items screen, but only one at a time and only while that panel is what you
+    are looking at. Tidying up a whole vocabulary -- renaming three, recoloring
+    two, deleting the one you created by accident -- is its own job, and it
+    wants its own window.
+
+    It does not implement adding, editing or deleting itself. Those already
+    exist on the Items screen and are handed in as callbacks, so there is one
+    implementation of each rather than two that can drift apart.
+    """
+
+    def __init__(self, parent, profile, on_add, on_edit, on_delete):
+        super().__init__(parent)
+        self.setWindowTitle("Edit tags")
+        self.setMinimumWidth(460)
+        self.setMinimumHeight(420)
+        self._profile = profile
+        self._on_add = on_add
+        self._on_edit = on_edit
+        self._on_delete = on_delete
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(theme.SPACE_XL, theme.SPACE_XL,
+                                  theme.SPACE_XL, theme.SPACE_XL)
+        layout.setSpacing(theme.SPACE_MD)
+
+        layout.addWidget(label("Edit tags", "sectionTitle"))
+        intro = label(
+            "Tags group things across rooms. Put one on an item to say what "
+            "it is, and the same one on a room to say what belongs there.",
+            "caption")
+        wrapped(intro)
+        layout.addWidget(intro)
+
+        header = QHBoxLayout()
+        self._count_label = QLabel("")
+        self._count_label.setObjectName("caption")
+        header.addWidget(self._count_label)
+        header.addStretch()
+        header.addWidget(button("+ New tag", "primary", self._add, size="sm"))
+        layout.addLayout(header)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        layout.addWidget(self._scroll, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(button("Done", "primary", self.accept))
+        layout.addLayout(buttons)
+
+        self._rebuild()
+
+    # -- the list --------------------------------------------------------------
+
+    def _rebuild(self):
+        body = QWidget()
+        body.setObjectName("plain")
+        inner = QVBoxLayout(body)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(theme.SPACE_XS)
+
+        tags = self._profile.tags
+        count = len(tags)
+        self._count_label.setText(
+            "No tags yet" if not count
+            else f"{count} tag" + ("" if count == 1 else "s"))
+
+        if not tags:
+            inner.addWidget(empty_state(
+                "No tags yet",
+                "Make one for anything you would want to find across several "
+                "rooms: Tools, Christmas, Fragile."))
+        else:
+            for tag in tags:
+                inner.addWidget(self._row(tag))
+
+        inner.addStretch()
+        self._scroll.setWidget(body)
+
+    def _row(self, tag):
+        row = QFrame()
+        row.setObjectName("card")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(theme.SPACE_SM, theme.SPACE_XS,
+                                  theme.SPACE_SM, theme.SPACE_XS)
+        layout.setSpacing(theme.SPACE_SM)
+
+        layout.addWidget(tag_chip(tag))
+
+        items = len(self._profile.items_with_tag(tag.id))
+        rooms = len(list(self._profile.rooms_with_tag(tag.id)))
+        usage = QLabel(f"{items} item" + ("" if items == 1 else "s")
+                       + f" · {rooms} room" + ("" if rooms == 1 else "s"))
+        usage.setStyleSheet(
+            f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(usage)
+
+        layout.addStretch()
+        layout.addWidget(button("Edit", "ghost",
+                                lambda checked=False, t=tag: self._edit(t),
+                                size="sm"))
+        delete = button("Delete", "ghost",
+                        lambda checked=False, t=tag: self._delete(t), size="sm")
+        delete.setProperty("kind", "danger")
+        layout.addWidget(delete)
+        return row
+
+    # -- the three actions, each handed in by the Items screen -----------------
+
+    def _add(self):
+        self._on_add()
+        self._rebuild()
+
+    def _edit(self, tag):
+        self._on_edit(tag)
+        self._rebuild()
+
+    def _delete(self, tag):
+        self._on_delete(tag)
+        self._rebuild()
 
 
 class BulkAddDialog(QDialog):
@@ -1109,22 +1354,22 @@ class BulkAddDialog(QDialog):
         # placed yet was to place it somewhere wrong first.
         self._container_field.addItem(UNFILED_CHOICE, None)
 
-        for floor, room, container in profile.iter_containers():
-            self._container_field.addItem(
-                short_path(floor, room, container), container.id)
-            self._container_field.setItemData(
-                self._container_field.count() - 1,
-                full_path(floor, room, container), Qt.ToolTipRole)
+        # fill_container_choices selects the match itself. findData cannot be
+        # used here: the data is a (container, tier) tuple, and Qt does not
+        # compare those the way Python does.
+        fill_container_choices(
+            self._container_field, profile,
+            None if default_container_id is None else (default_container_id, 0))
 
         # Index 0 is the unfiled row, so anything past it is a real container.
         has_containers = self._container_field.count() > 1
 
         # Default to a real place when there is one, because most of the time
         # you are standing in front of the drawer you are filling. Unfiled is
-        # one row up the list for the times you are not.
-        if has_containers:
-            chosen = self._container_field.findData(default_container_id)
-            self._container_field.setCurrentIndex(chosen if chosen > 0 else 1)
+        # one row up the list for the times you are not. Index 0 still showing
+        # means nothing matched, so fall back to the first real container.
+        if has_containers and self._container_field.currentIndex() == 0:
+            self._container_field.setCurrentIndex(1)
 
         self._container_field.currentIndexChanged.connect(self._refresh_target)
 
@@ -1349,11 +1594,12 @@ class BulkAddDialog(QDialog):
         it has somewhere to live, and it is there as a sensible number to fall
         back on if you later take it out of every container.
         """
-        container_id = self._container_field.currentData()
+        place = self._container_field.currentData()
+        container_id, tier = place if place else (None, 0)
         created = []
 
         for name, quantity in self._queued:
-            placements = ([Placement(container_id, quantity)]
+            placements = ([Placement(container_id, quantity, tier)]
                           if container_id else [])
             created.append(Item(
                 name=name,

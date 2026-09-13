@@ -69,6 +69,7 @@ HANDLE_RADIUS = 5
 SCALE_HANDLE_SIZE = 9
 LABEL_MARGIN = 26        # extra room in boundingRect for text drawn above a shape
 MIN_ROOM_SIZE = 40       # a room can't be squashed smaller than this
+MIN_CONTAINER_SIZE = 20  # and a container can't go below one grid square
 
 # The two edit modes described in the module docstring.
 # What dragging a room MEANS right now. Exactly one of these is in force
@@ -194,11 +195,14 @@ class ScaleHandle(QGraphicsRectItem):
     in charge, which is what keeps it predictable.
     """
 
-    def __init__(self, room_item, role):
+    def __init__(self, target, role):
         half = SCALE_HANDLE_SIZE / 2
         super().__init__(-half, -half, SCALE_HANDLE_SIZE, SCALE_HANDLE_SIZE,
-                         room_item)
-        self.room_item = room_item
+                         target)
+        # Whatever this handle resizes. A room or a container: both answer
+        # drag_edge() and commit_geometry(), and this class does not need to
+        # know which it has. One handle class, two shapes.
+        self.target = target
         self.role = role
 
         self.setZValue(11)
@@ -218,11 +222,11 @@ class ScaleHandle(QGraphicsRectItem):
         # event.pos() is in the handle's own coordinates; mapToParent turns it
         # into the room's, which is what the room's bounds are measured in.
         point = snap_point(self.mapToParent(event.pos()))
-        self.room_item.drag_edge(self.role, point)
+        self.target.drag_edge(self.role, point)
 
     def mouseReleaseEvent(self, event):
         event.accept()
-        self.room_item.commit_geometry()
+        self.target.commit_geometry()
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +251,11 @@ class ContainerItem(QGraphicsRectItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setZValue(2)
+
+        self.editable = False
+        self.scale_handles = [ScaleHandle(self, role) for role in SCALE_ROLES]
+        self._position_handles()
+
         self.set_editable(False)
 
         # Pulsed on and off by the view when you ask "where is this?" from the
@@ -254,14 +263,121 @@ class ContainerItem(QGraphicsRectItem):
         # busy floor.
         self.highlighted = False
 
+    # -- what a drag means right now -----------------------------------------
+
     def set_editable(self, editable):
-        """Turn dragging on or off, and show the right mouse cursor."""
-        self.setFlag(QGraphicsItem.ItemIsMovable, editable)
-        self.setCursor(Qt.SizeAllCursor if editable else Qt.ArrowCursor)
+        """Told by the room whether we are working inside it."""
+        self.editable = editable
+        self.refresh_interaction()
+
+    def refresh_interaction(self):
+        """Decide in ONE place what this container responds to.
+
+        Containers follow the same Move / Resize switch rooms do, so the same
+        drag never means two things. Edit shape is about a room's outline and
+        a container has no outline to edit, so it leaves containers alone.
+
+        Nothing here happens at all unless you are working inside the room,
+        which is what stops a drawer being nudged while you drag the room.
+        """
+        mode = self.room_item.edit_mode
+        can_move = self.editable and mode == EDIT_MOVE
+        can_resize = self.editable and mode == EDIT_RESIZE
+
+        self.setFlag(QGraphicsItem.ItemIsMovable, can_move)
+        self.setCursor(Qt.SizeAllCursor if can_move else Qt.ArrowCursor)
         self.setAcceptedMouseButtons(
-            Qt.LeftButton if editable else Qt.NoButton)
+            Qt.LeftButton if (can_move or can_resize) else Qt.NoButton)
+
+        showing = can_resize and self.isSelected()
+        for handle in self.scale_handles:
+            handle.setVisible(showing)
+
+    def _position_handles(self):
+        """Put the eight handles back on the container's edges."""
+        left, top = 0.0, 0.0
+        right, bottom = self.container.w, self.container.h
+        middle_x = (left + right) / 2
+        middle_y = (top + bottom) / 2
+        places = {
+            "nw": (left, top), "n": (middle_x, top), "ne": (right, top),
+            "e": (right, middle_y), "se": (right, bottom),
+            "s": (middle_x, bottom), "sw": (left, bottom),
+            "w": (left, middle_y),
+        }
+        for handle in self.scale_handles:
+            handle.setPos(*places[handle.role])
+
+    # -- resizing ------------------------------------------------------------
+
+    def drag_edge(self, role, point):
+        """A handle was dragged: move that edge and leave the rest alone.
+
+        `point` arrives in this container's own coordinates, where the box
+        always starts at (0, 0). The opposite edge stays put, which is what
+        makes a corner handle pivot around the corner across from it.
+        """
+        left, top = 0.0, 0.0
+        right, bottom = self.container.w, self.container.h
+
+        if "w" in role:
+            left = min(point.x(), right - MIN_CONTAINER_SIZE)
+        if "e" in role:
+            right = max(point.x(), left + MIN_CONTAINER_SIZE)
+        if "n" in role:
+            top = min(point.y(), bottom - MIN_CONTAINER_SIZE)
+        if "s" in role:
+            bottom = max(point.y(), top + MIN_CONTAINER_SIZE)
+
+        self.resize_to(self.pos().x() + left, self.pos().y() + top,
+                       right - left, bottom - top)
+
+    def resize_to(self, x, y, width, height):
+        """Move and resize in room coordinates, clamped inside the room.
+
+        Also used by the inspector's W and H boxes, so both routes clamp the
+        same way and cannot disagree about what fits.
+        """
+        room_left, room_top, room_w, room_h = self.room_item.room.bounds()
+
+        width = max(width, MIN_CONTAINER_SIZE)
+        height = max(height, MIN_CONTAINER_SIZE)
+        width = min(width, room_w)
+        height = min(height, room_h)
+
+        x = min(max(x, room_left), room_left + room_w - width)
+        y = min(max(y, room_top), room_top + room_h - height)
+
+        self.container.x = x
+        self.container.y = y
+        self.container.w = width
+        self.container.h = height
+
+        self.prepareGeometryChange()
+        self.setRect(0, 0, width, height)
+        # setPos would come back through itemChange and clamp again, which is
+        # harmless but does the work twice. The values above are already
+        # inside the room.
+        self.setPos(x, y)
+        self._position_handles()
+        self.update()
+
+        self.room_item.editor.notify_container_resized(self.container)
+
+    def commit_geometry(self):
+        """Called when a resize handle is let go. The size is already in the
+        model, so this just asks for a save."""
+        self.room_item.editor.notify_changed()
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemSelectedChange:
+            # Qt has not applied the new value yet, so use what it is about
+            # to become rather than what isSelected() still reports.
+            showing = (bool(value) and self.editable
+                       and self.room_item.edit_mode == EDIT_RESIZE)
+            for handle in self.scale_handles:
+                handle.setVisible(showing)
+
         if change == QGraphicsItem.ItemPositionChange and self.scene():
             point = snap_point(value)
             # Keep the container inside its room's bounding box. Clamping to
@@ -485,6 +601,10 @@ class RoomItem(QGraphicsPolygonItem):
         self.edit_mode = mode
         self._update_movable()
         self._update_handle_visibility()
+        # The containers inside follow the same switch, so they have to hear
+        # about it too.
+        for container_item in self.container_items:
+            container_item.refresh_interaction()
         self.update()
 
     def set_locked(self, locked):
@@ -507,7 +627,7 @@ class RoomItem(QGraphicsPolygonItem):
         """
         self.focused = focused
         for container_item in self.container_items:
-            container_item.set_editable(focused)
+            container_item.set_editable(focused)   # also refreshes handles
         self._update_movable()
         self._update_handle_visibility()
         self.update()
