@@ -308,6 +308,25 @@ bottoms off the letters, and it looks like a font problem rather than a layout
 one, so you go looking in completely the wrong place. Use `setMinimumHeight`
 instead.
 
+**A panel with no horizontal scrollbar can silently slice its own contents.**
+A `QScrollArea` hands its widget the LARGER of the viewport width and the
+widget's own minimum. So one child asking for a few pixels more than the column
+has does not produce a scrollbar you can drag, it produces content cut off at
+the edge with nothing to tell you. Turning the scrollbar off fixes the ugly
+version of this and hides the real one.
+
+It showed up on Windows and not in testing, because the interface font there is
+wider, and every minimum width in a layout is measured in whatever font is
+actually installed. Two spin boxes side by side were the widest thing in the
+inspector and they would not shrink, because a spin box asks for room to show
+its largest value plus its arrows.
+
+Three things fix it properly: give anything that can be squeezed an explicit
+minimum so it will squeeze, let a crowded row of buttons wrap instead of
+overflowing, and cap the body's width to the viewport so the panel structurally
+cannot draw outside itself. The test for it widens the font on purpose, because
+that is the only way to catch it on a machine where it fits.
+
 **Wrapping text needs two things, not one.** `setWordWrap(True)` only tells the
 label it's allowed to wrap. A layout won't ask "how tall are you at this width?"
 unless the widget's size *policy* says it has an answer, and QLabel doesn't set

@@ -23,7 +23,8 @@ from floor_items import EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES
 from models import Container, Item, Room, short
 from widgets import (
     ColorPicker, ItemDialog, TagChipRow, TagPickerDialog, button, confirm,
-    divider, empty_state, label, name_field, short_label, wrapped,
+    WrappingRow, divider, empty_state, label, name_field, short_label,
+    wrapped,
 )
 
 PANEL_WIDTH = 300
@@ -70,6 +71,24 @@ class Inspector(QWidget):
 
         self.show_selection(None)
 
+    def resizeEvent(self, event):
+        """Keep the panel's contents inside the panel.
+
+        With no horizontal scrollbar, a QScrollArea hands its widget the
+        LARGER of the viewport width and the widget's own minimum. So one
+        child insisting on a few pixels more than the column has does not
+        produce a scrollbar, it produces content quietly sliced off at the
+        right edge, which is what this looked like on Windows where the UI
+        font is wider than the one it was measured against.
+
+        Capping the body here means the panel can never draw outside itself,
+        whatever gets added to it later.
+        """
+        super().resizeEvent(event)
+        body = self._scroll.widget()
+        if body is not None:
+            body.setMaximumWidth(self._scroll.viewport().width())
+
     def set_profile(self, profile):
         self.profile = profile
         self.focused_room_id = None
@@ -110,8 +129,11 @@ class Inspector(QWidget):
 
         body = QWidget()
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(theme.SPACE_MD, theme.SPACE_MD,
-                                  theme.SPACE_MD, theme.SPACE_MD)
+        # A little more air on the sides than top and bottom. The right
+        # margin is the one that shows: without it the buttons and boxes run
+        # flush into the window edge and look cut off even when they fit.
+        layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_MD,
+                                  theme.SPACE_LG, theme.SPACE_MD)
         # Tight by default, with the blocks below adding their own space
         # where a section actually changes. At SPACE_MD every single
         # widget sat 12px from the next, including a caption and the box
@@ -126,6 +148,7 @@ class Inspector(QWidget):
             self._build_empty(layout)
 
         layout.addStretch()
+        body.setMaximumWidth(self._scroll.viewport().width())
         self._scroll.setWidget(body)
 
     # -- nothing selected -----------------------------------------------------
@@ -365,6 +388,13 @@ class Inspector(QWidget):
         for field, value in ((width_field, width), (height_field, height)):
             field.setRange(40, 4000)
             field.setEnabled(not room.locked)
+            # A spin box asks for enough room to show its largest value plus
+            # its arrows, and it will not go below that on its own. Two of
+            # them side by side were the widest thing in the panel, and on a
+            # system with a wider UI font they pushed the whole column past
+            # its own edge. An explicit minimum overrides that hint and lets
+            # the row compress instead.
+            field.setMinimumWidth(60)
             field.setSingleStep(theme.GRID_SIZE)
             # Set the starting value with signals off, or simply building the
             # panel would look like the user asking for a resize.
@@ -425,8 +455,10 @@ class Inspector(QWidget):
         layout.addSpacing(theme.SPACE_XS)
         layout.addWidget(label("Mode", "caption"))
 
-        row = QHBoxLayout()
-        row.setSpacing(theme.SPACE_XS)
+        # A wrapping row, not a plain one. Three named buttons are wider than
+        # this column on a system with a wide interface font, and "Edit shape"
+        # dropping to a second line is much better than it being cut in half.
+        row = WrappingRow()
 
         group = QButtonGroup(self)
         group.setExclusive(True)
@@ -448,10 +480,9 @@ class Inspector(QWidget):
             group.addButton(candidate)
             candidate.clicked.connect(
                 lambda checked=False, m=mode: self._set_edit_mode(m))
-            row.addWidget(candidate)
+            row.add(candidate)
 
-        row.addStretch()
-        layout.addLayout(row)
+        layout.addWidget(row)
 
     def _lock_block(self, layout, room):
         """The lock toggle, and a line saying what it is doing.

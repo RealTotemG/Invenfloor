@@ -475,6 +475,42 @@ def tag_chip(tag, small=False):
     return chip
 
 
+class WrappingRow(QWidget):
+    """A row of widgets that drops onto a second line rather than overflowing.
+
+    Same trick as TagChipRow below, and for the same reason: a fixed-width
+    panel has no way to grow, so a row that insists on more space than the
+    panel has does not scroll, it gets sliced off at the edge. Three buttons
+    named Move, Resize and Edit shape fit comfortably in the inspector here,
+    but on a system with a wider interface font they would not, and a button
+    you cannot read the name of is the one thing this row must never produce.
+
+    Both halves of the heightForWidth protocol are needed. The widget answers
+    the question AND its size policy declares that it can, otherwise Qt never
+    asks and the second line is drawn outside the space reserved for it.
+    """
+
+    def __init__(self, spacing=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("plain")
+        self._layout = FlowLayout(
+            self, spacing=theme.SPACE_XS if spacing is None else spacing)
+
+        policy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def add(self, widget):
+        self._layout.addWidget(widget)
+        return widget
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._layout.heightForWidth(width)
+
+
 class TagChipRow(QWidget):
     """A wrapping row of tag chips, with an optional "no tags" placeholder.
 
