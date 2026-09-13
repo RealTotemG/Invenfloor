@@ -178,7 +178,7 @@ class Inspector(QWidget):
             "<b>Double-click</b> a room to work inside it<br><br>"
             "<b>Scroll</b> to zoom, <b>middle-drag</b> to pan<br><br>"
             "<b>Delete</b> removes the selected thing")
-        wrapped(tips)
+        wrapped(tips, grow=False)
         tips.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(tips)
@@ -313,7 +313,7 @@ class Inspector(QWidget):
             hint = QLabel(
                 "None yet. Pick <b>Add container</b> in the toolbar and drag a "
                 "box inside this room.")
-            wrapped(hint)
+            wrapped(hint, grow=False)
             hint.setStyleSheet(
                 f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
             layout.addWidget(hint)
@@ -498,9 +498,10 @@ class Inspector(QWidget):
         row.addWidget(height_field, 1)
         layout.addLayout(row)
 
-        hint = QLabel("Double-click the room to work inside it, then drag the "
-                      "handles in Resize mode.")
-        wrapped(hint)
+        hint = QLabel("Switch to Resize and drag the handles, or type here. "
+                      "To move it instead, double-click the room to work "
+                      "inside it.")
+        wrapped(hint, grow=False)
         hint.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(hint)
@@ -538,7 +539,7 @@ class Inspector(QWidget):
                           + ("" if container.tier_count == 1 else "s")
                           + ". Items can sit on a tier, or loose in the "
                             "container itself.")
-        wrapped(note)
+        wrapped(note, grow=False)
         note.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
         layout.addWidget(note)
@@ -646,7 +647,7 @@ class Inspector(QWidget):
         if room.locked:
             note = QLabel("Locked: position, size and shape are held. "
                           "Renaming, tags and containers still work.")
-            wrapped(note)
+            wrapped(note, grow=False)
             note.setStyleSheet(
                 f"color: {theme.TEXT_FAINT}; "
                 f"font-size: {theme.FONT_SIZE_SM}px;")

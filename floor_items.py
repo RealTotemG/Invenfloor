@@ -277,12 +277,23 @@ class ContainerItem(QGraphicsRectItem):
         drag never means two things. Edit shape is about a room's outline and
         a container has no outline to edit, so it leaves containers alone.
 
-        Nothing here happens at all unless you are working inside the room,
-        which is what stops a drawer being nudged while you drag the room.
+        The two modes ask for different things, and it is worth being clear
+        why they differ rather than looking inconsistent:
+
+          Resize  works straight away, focused or not. Resize holds rooms
+                  still anyway, so there is no drag on the floor plan for a
+                  container to steal. Making you double-click into the room
+                  first was pure ceremony: you could already type the numbers
+                  into the inspector from anywhere.
+
+          Move    still needs you working inside the room. Here a drag DOES
+                  mean something else -- move the whole room -- and a drawer
+                  quietly coming along for the ride is exactly the accident
+                  focus mode exists to prevent.
         """
         mode = self.room_item.edit_mode
         can_move = self.editable and mode == EDIT_MOVE
-        can_resize = self.editable and mode == EDIT_RESIZE
+        can_resize = mode == EDIT_RESIZE
 
         self.setFlag(QGraphicsItem.ItemIsMovable, can_move)
         self.setCursor(Qt.SizeAllCursor if can_move else Qt.ArrowCursor)
@@ -373,8 +384,7 @@ class ContainerItem(QGraphicsRectItem):
         if change == QGraphicsItem.ItemSelectedChange:
             # Qt has not applied the new value yet, so use what it is about
             # to become rather than what isSelected() still reports.
-            showing = (bool(value) and self.editable
-                       and self.room_item.edit_mode == EDIT_RESIZE)
+            showing = bool(value) and self.room_item.edit_mode == EDIT_RESIZE
             for handle in self.scale_handles:
                 handle.setVisible(showing)
 

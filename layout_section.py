@@ -265,11 +265,16 @@ class LayoutSection(QWidget):
         self._select_button = self._tool_button("Select", MODE_SELECT)
         self._draw_button = self._tool_button("Draw room", MODE_DRAW_ROOM)
         self._box_button = self._tool_button("Add container", MODE_ADD_BOX)
-        for tool in (self._select_button, self._draw_button, self._box_button):
-            layout.addWidget(tool)
-        self._select_button.setChecked(True)
 
+        # Order matters here. Draw room and Shape both make a room, so they sit
+        # together, and Add container comes after them because it is the next
+        # thing you do rather than another way of doing the same thing.
+        layout.addWidget(self._select_button)
+        layout.addWidget(self._draw_button)
         layout.addWidget(self._build_shape_button())
+        layout.addWidget(self._box_button)
+
+        self._select_button.setChecked(True)
 
         layout.addSpacing(theme.SPACE_MD)
 

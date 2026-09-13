@@ -226,7 +226,7 @@ def short_label(text, style=None, limit=None):
     return result
 
 
-def wrapped(text_label):
+def wrapped(text_label, grow=True):
     """Make a label wrap its text AND actually get the height to do it.
 
     setWordWrap(True) on its own is not enough, and this is a genuinely nasty
@@ -242,7 +242,22 @@ def wrapped(text_label):
     text_label.setWordWrap(True)
     policy = text_label.sizePolicy()
     policy.setHeightForWidth(True)
-    policy.setVerticalPolicy(QSizePolicy.MinimumExpanding)
+
+    # MinimumExpanding by default, Minimum when the caller says not to grow.
+    #
+    # Both allow the label to be as tall as its wrapped text needs, which is
+    # the half that stops text being sliced. The difference is what happens
+    # when there is space going spare. Expanding says "and I would LIKE more",
+    # so in a panel with a stretch at the bottom these labels swell to double
+    # their height and leave strange gaps between the blocks around them.
+    #
+    # It cannot simply be Minimum everywhere, though. In a layout with no
+    # stretch of its own -- the empty state inside a dialog is the one that
+    # caught this -- Minimum leaves the label with a single line's height and
+    # the second line gets painted outside it. So the default stays as it was,
+    # and the places that sit above a stretch opt out.
+    policy.setVerticalPolicy(QSizePolicy.MinimumExpanding if grow
+                             else QSizePolicy.Minimum)
     text_label.setSizePolicy(policy)
     return text_label
 

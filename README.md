@@ -162,11 +162,23 @@ stop moving it.
 **Containers.** Pick Add container and drag a box inside a room. You can't drag
 one on empty canvas, on purpose.
 
-Double-click into a room to work inside it and containers wake up. They follow
-the same Move and Resize switch rooms do: drag the body in Move, drag the edge
-handles in Resize. There are W and H boxes in the inspector too, and they track
-a drag the same way a room's do. A container is clamped to its room, so you
-can't stretch a drawer out through a wall.
+Containers follow the same Move and Resize switch rooms do, with one
+difference between the two modes that's worth spelling out.
+
+**Resize works straight away.** Switch to Resize, click a container, drag its
+handles. Resize holds rooms still anyway, so there's no drag on the floor plan
+for a container to steal, and making you double-click into the room first was
+pure ceremony. You could already type the numbers into the inspector from
+anywhere, so the handles had no business being harder to reach than the boxes.
+
+**Move still needs you inside the room.** Double-click the room first. Here a
+drag genuinely does mean something else, move the whole room, and a drawer
+quietly coming along for the ride is exactly the accident that focus mode
+exists to prevent.
+
+There are W and H boxes in the inspector either way, and they track a drag the
+same way a room's do. A container is clamped to its room, so you can't stretch
+a drawer out through a wall or shrink one below 20.
 
 Edit shape leaves containers alone. A container is a rectangle and has no
 outline to edit, so that mode is about the room it sits in.
