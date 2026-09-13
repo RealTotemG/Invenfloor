@@ -386,12 +386,20 @@ class Room:
     tag_ids: list = field(default_factory=list)
     containers: list = field(default_factory=list)
 
+    # "I am done arranging this one." A locked room cannot be dragged,
+    # resized or reshaped, and shows no handles. Everything else still
+    # works: rename it, recolor it, tag it, fill it with containers. The
+    # lock is about the floor plan being settled, not about the room being
+    # read-only.
+    locked: bool = False
+
     def to_dict(self):
         return {
             "id": self.id, "name": self.name, "color": self.color,
             "x": self.x, "y": self.y,
             "points": [[px, py] for px, py in self.points],
             "tag_ids": list(self.tag_ids),
+            "locked": self.locked,
             "containers": [c.to_dict() for c in self.containers],
         }
 
@@ -404,6 +412,9 @@ class Room:
             x=raw.get("x", 0.0), y=raw.get("y", 0.0),
             points=[list(p) for p in raw.get("points", [])],
             tag_ids=list(raw.get("tag_ids", [])),
+            # Save files written before locks existed have no such key, and
+            # an unlocked room is the right thing for them to become.
+            locked=bool(raw.get("locked", False)),
             containers=[Container.from_dict(c) for c in raw.get("containers", [])],
         )
 

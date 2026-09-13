@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from floor_items import EDIT_RESIZE, EDIT_VERTICES
+from floor_items import EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES
 from models import Container, Item, Room, short
 from widgets import (
     ColorPicker, ItemDialog, TagChipRow, TagPickerDialog, button, confirm,
@@ -37,6 +37,7 @@ class Inspector(QWidget):
     deletedRoom = Signal(object)
     deletedContainer = Signal(object)
     resizeRoomRequested = Signal(object, float, float)   # room, width, height
+    lockChanged = Signal(object, bool)                   # room, locked
     editModeChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -45,7 +46,7 @@ class Inspector(QWidget):
         self.setFixedWidth(PANEL_WIDTH)
         self.profile = None
         self.selection = None
-        self.edit_mode = EDIT_RESIZE
+        self.edit_mode = EDIT_MOVE
         # The two size boxes, when a room is showing. See room_resized().
         self._width_field = None
         self._height_field = None
@@ -234,8 +235,13 @@ class Inspector(QWidget):
         name.setStyleSheet(f"color: {theme.TEXT};")
         text_column.addWidget(name)
         if subtitle:
+            # A plain label, deliberately not wrapped(). wrapped() asks for a
+            # MinimumExpanding height, which means "I would like to grow", and
+            # with only two containers in the list there was spare room in the
+            # panel for these rows to grow into. Two drawers came out as two
+            # fat cards. The subtitle here is always a short count line, so it
+            # has nothing to wrap anyway.
             sub = QLabel(subtitle)
-            wrapped(sub)
             sub.setStyleSheet(
                 f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE_SM}px;")
             text_column.addWidget(sub)
@@ -259,7 +265,8 @@ class Inspector(QWidget):
 
         layout.addSpacing(theme.SPACE_SM)
         self._size_block(layout, room)
-        self._shape_mode_block(layout)
+        self._shape_mode_block(layout, room)
+        self._lock_block(layout, room)
 
         self._tags_block(layout, room, "room")
 
@@ -357,6 +364,7 @@ class Inspector(QWidget):
 
         for field, value in ((width_field, width), (height_field, height)):
             field.setRange(40, 4000)
+            field.setEnabled(not room.locked)
             field.setSingleStep(theme.GRID_SIZE)
             # Set the starting value with signals off, or simply building the
             # panel would look like the user asking for a resize.
@@ -403,14 +411,19 @@ class Inspector(QWidget):
             field.setValue(int(round(value)))
             field.blockSignals(False)
 
-    def _shape_mode_block(self, layout):
-        """The Resize / Edit shape switch.
+    def _shape_mode_block(self, layout, room):
+        """The Move / Resize / Edit shape switch.
 
-        Two buttons rather than a checkbox because it is a choice between two
-        named things, not something you turn on.
+        Three named buttons rather than a checkbox, because it is a choice
+        between three things, and each one gives a drag on the room a
+        different meaning. Move used to be bundled into Resize, so the same
+        drag did two jobs and nothing on screen said so.
+
+        All three are disabled on a locked room: none of them could do
+        anything, and a button that does nothing is worse than a grayed one.
         """
         layout.addSpacing(theme.SPACE_XS)
-        layout.addWidget(label("Handles", "caption"))
+        layout.addWidget(label("Mode", "caption"))
 
         row = QHBoxLayout()
         row.setSpacing(theme.SPACE_XS)
@@ -418,26 +431,54 @@ class Inspector(QWidget):
         group = QButtonGroup(self)
         group.setExclusive(True)
 
-        resize_button = button("Resize", "ghost", size="sm",
-                               tooltip="Drag the squares to stretch the whole "
-                                       "room, keeping its shape")
-        shape_button = button("Edit shape", "ghost", size="sm",
-                              tooltip="Drag the round handles to move "
-                                      "individual corners")
+        modes = (
+            ("Move", EDIT_MOVE,
+             "Drag the room itself to reposition it on the floor"),
+            ("Resize", EDIT_RESIZE,
+             "Drag the squares to stretch the whole room, keeping its shape"),
+            ("Edit shape", EDIT_VERTICES,
+             "Drag the round handles to move individual corners"),
+        )
 
-        for candidate, mode in ((resize_button, EDIT_RESIZE),
-                                (shape_button, EDIT_VERTICES)):
+        for text, mode, tip in modes:
+            candidate = button(text, "ghost", size="sm", tooltip=tip)
             candidate.setCheckable(True)
+            candidate.setChecked(self.edit_mode == mode)
+            candidate.setEnabled(not room.locked)
             group.addButton(candidate)
             candidate.clicked.connect(
                 lambda checked=False, m=mode: self._set_edit_mode(m))
             row.addWidget(candidate)
 
-        resize_button.setChecked(self.edit_mode == EDIT_RESIZE)
-        shape_button.setChecked(self.edit_mode == EDIT_VERTICES)
-
         row.addStretch()
         layout.addLayout(row)
+
+    def _lock_block(self, layout, room):
+        """The lock toggle, and a line saying what it is doing.
+
+        The explanation only appears while locked. Saying what a lock would
+        do before you have used it is noise; saying why the handles vanished
+        the moment they vanish is the useful half.
+        """
+        layout.addSpacing(theme.SPACE_XS)
+
+        toggle = button(
+            "Unlock room" if room.locked else "Lock room",
+            "ghost", size="sm",
+            tooltip="A locked room cannot be moved, resized or reshaped. "
+                    "You can still rename it, tag it and fill it.")
+        toggle.clicked.connect(
+            lambda: self.lockChanged.emit(room, not room.locked))
+        layout.addWidget(toggle)
+
+        if room.locked:
+            note = QLabel("Locked: position, size and shape are held. "
+                          "Renaming, tags and containers still work.")
+            wrapped(note)
+            note.setStyleSheet(
+                f"color: {theme.TEXT_FAINT}; "
+                f"font-size: {theme.FONT_SIZE_SM}px;")
+            layout.addWidget(note)
 
     def set_edit_mode(self, mode):
         """Told by the canvas which handles rooms are showing.

@@ -13,11 +13,22 @@ like `is_drawing` and `is_placing` -- is what stops canvas code turning into
 an unreadable mess, because there is only ever one answer to "what does a
 click mean right now?".
 
-    SELECT     click to select, drag to move, drag a corner handle to reshape,
-               double-click a room to focus it
+    SELECT     click to select, then the room edit mode below decides what
+               dragging does. Double-click a room to focus it.
     DRAW_ROOM  click to place each corner, click the first corner again (or
                press Enter) to close the shape
     ADD_BOX    drag a rectangle inside a room to create a container there
+
+MOVE, RESIZE, EDIT SHAPE
+------------------------
+A second, separate setting, held in `room_edit_mode` and shared by every
+room on the canvas. It answers "what does dragging a selected room do?":
+move it, stretch it, or pull its corners about. Picking one sticks as you
+click from room to room, which is why it lives on the view rather than on
+each room.
+
+A room can also be LOCKED, which overrules all three: no dragging, no
+handles, and a dashed outline so you can see why.
 
 FOCUS
 -----
@@ -35,8 +46,8 @@ from PySide6.QtWidgets import (
 
 import theme
 from floor_items import (
-    EDIT_RESIZE, EDIT_VERTICES, ContainerItem, RoomItem, VertexHandle,
-    snap, snap_point, qcolor,
+    EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES, ContainerItem, RoomItem,
+    VertexHandle, snap, snap_point, qcolor,
 )
 from models import Container, Room, ROOM_PRESETS
 
@@ -91,7 +102,9 @@ class FloorView(QGraphicsView):
         # Which handles a selected room shows. Kept on the view rather than
         # per room so the choice sticks as you click from room to room --
         # otherwise you would have to re-pick "Edit shape" every single time.
-        self.room_edit_mode = EDIT_RESIZE
+        # Move is the first thing anyone does with a floor plan, so it
+        # is where the canvas starts.
+        self.room_edit_mode = EDIT_MOVE
 
         # Used by reveal_container() to pulse a container on and off.
         self._flash_target = None
@@ -144,7 +157,7 @@ class FloorView(QGraphicsView):
         self.roomFocused.emit(None)
 
     def set_room_edit_mode(self, mode):
-        """Switch every room between resize handles and per-corner handles.
+        """Switch every room between Move, Resize and Edit shape.
 
         The view owns this setting. The inspector used to keep its own copy,
         which meant changing the mode from the canvas menu left the
@@ -179,7 +192,13 @@ class FloorView(QGraphicsView):
                 return
 
     def resize_room(self, room, width, height):
-        """Stretch a room to an exact size. Used by the inspector's W/H boxes."""
+        """Stretch a room to an exact size. Used by the inspector's W/H boxes.
+
+        Refuses on a locked room. The inspector grays the boxes out anyway,
+        but this is a public method and the lock should hold whoever calls it.
+        """
+        if room.locked:
+            return
         for room_item in self.room_items:
             if room_item.room.id == room.id:
                 room_item.resize_room(width, height)
@@ -246,6 +265,12 @@ class FloorView(QGraphicsView):
         """Called by the shapes when they are dragged. Triggers an autosave."""
         self.dataChanged.emit()
 
+    def set_room_locked(self, room_item, locked):
+        """Lock or unlock one room, and save the change."""
+        room_item.set_locked(locked)
+        self.itemSelected.emit(room_item.room)   # redraw the inspector
+        self.dataChanged.emit()
+
     def notify_resized(self, room):
         """Called by a room every time its size changes, including partway
         through a drag.
@@ -265,6 +290,13 @@ class FloorView(QGraphicsView):
         self.cancel_draft()
         self.mode = mode
 
+        # Reaching for a drawing tool means you are done with whatever was
+        # selected. Leaving it selected left the inspector showing a room
+        # you were no longer working on, with its handles still out, while
+        # you drew a different one somewhere else.
+        if mode != MODE_SELECT:
+            self.scene().clearSelection()
+
         # Rubber-band marquee selection only makes sense in select mode.
         self.setDragMode(QGraphicsView.RubberBandDrag if mode == MODE_SELECT
                          else QGraphicsView.NoDrag)
@@ -282,6 +314,10 @@ class FloorView(QGraphicsView):
         """
         self.cancel_draft()
         self._shape_builder = builder
+        # Same reasoning as set_mode: arming a shape means you are drawing a
+        # new room, not editing the old one. Needed here as well because the
+        # early return below skips set_mode entirely.
+        self.scene().clearSelection()
 
         if self.mode == MODE_ADD_SHAPE:
             self.modeChanged.emit(MODE_ADD_SHAPE)
@@ -803,14 +839,22 @@ class FloorView(QGraphicsView):
             menu.addAction("Work inside this room").triggered.connect(
                 lambda: self.set_focused_room(room_item))
 
-        # A checkable pair, so the menu also tells you which mode you are in.
-        resize = menu.addAction("Resize handles")
-        shape = menu.addAction("Edit shape handles")
-        for action, mode in ((resize, EDIT_RESIZE), (shape, EDIT_VERTICES)):
+        # A checkable set, so the menu also tells you which mode you are in.
+        # Disabled on a locked room, where none of them would do anything.
+        locked = room_item.room.locked
+        for text, mode in (("Move", EDIT_MOVE),
+                           ("Resize", EDIT_RESIZE),
+                           ("Edit shape", EDIT_VERTICES)):
+            action = menu.addAction(text)
             action.setCheckable(True)
             action.setChecked(self.room_edit_mode == mode)
+            action.setEnabled(not locked)
             action.triggered.connect(
                 lambda checked=False, m=mode: self.set_room_edit_mode(m))
+
+        menu.addSeparator()
+        menu.addAction("Unlock room" if locked else "Lock room").triggered.connect(
+            lambda: self.set_room_locked(room_item, not locked))
 
         menu.addSeparator()
         menu.addAction("Rename…").triggered.connect(

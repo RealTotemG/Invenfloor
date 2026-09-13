@@ -271,6 +271,13 @@ def stylesheet():
         background-color: {BG_PANEL};
         border-color: {BORDER};
     }}
+    /* A checked button that is also disabled has to lose its ring, or the
+       current mode on a locked room still looks lit and clickable. */
+    QPushButton:checked:disabled {{
+        color: {TEXT_FAINT};
+        background-color: {BG_PANEL};
+        border-color: {BORDER};
+    }}
 
     QPushButton[kind="primary"] {{
         background-color: {ACCENT};
@@ -348,6 +355,14 @@ def stylesheet():
     }}
     QLineEdit::placeholder {{
         color: {TEXT_FAINT};
+    }}
+    /* Grayed out has to LOOK grayed out. Without this a disabled W/H box on
+       a locked room reads as an ordinary editable field. */
+    QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
+    QSpinBox:disabled {{
+        color: {TEXT_FAINT};
+        background-color: {BG_PANEL};
+        border-color: {BORDER};
     }}
 
     QSpinBox::up-button, QSpinBox::down-button {{

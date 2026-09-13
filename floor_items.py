@@ -71,6 +71,19 @@ LABEL_MARGIN = 26        # extra room in boundingRect for text drawn above a sha
 MIN_ROOM_SIZE = 40       # a room can't be squashed smaller than this
 
 # The two edit modes described in the module docstring.
+# What dragging a room MEANS right now. Exactly one of these is in force
+# across the whole canvas, and every mode answers the question differently,
+# which is the point of having three of them rather than a pile of flags.
+#
+#   Move      drag the body to reposition it. No handles.
+#   Resize    square handles stretch it. The body does not move.
+#   Vertices  round handles on each corner reshape it. The body does not
+#             move either, so a drag across it reads as "I am working on
+#             this outline" rather than "put this somewhere else".
+#
+# Move used to be folded into Resize, which meant one mode did two jobs and
+# the other did one, and no label on screen could tell you that.
+EDIT_MOVE = "move"
 EDIT_RESIZE = "resize"
 EDIT_VERTICES = "vertices"
 
@@ -358,7 +371,7 @@ class RoomItem(QGraphicsPolygonItem):
         self.editor = editor          # the FloorView, so we can report changes
         self.focused = False
         self.dimmed = False
-        self.edit_mode = EDIT_RESIZE
+        self.edit_mode = EDIT_MOVE
         self.syncing = False          # see VertexHandle.itemChange
         self.handles = []
         self.scale_handles = []
@@ -448,13 +461,23 @@ class RoomItem(QGraphicsPolygonItem):
 
         self._update_handle_visibility()
 
-    def _update_handle_visibility(self):
-        """Show the handles that match the current mode, and only those."""
-        active = self.isSelected() and not self.focused
+    def _apply_handle_visibility(self, selected):
+        """Show the handles that match the current mode, and only those.
+
+        Takes `selected` rather than asking isSelected(), because itemChange
+        needs to run this with the value Qt is about to apply, which is not
+        the one the item is reporting yet.
+        """
+        # A locked room shows nothing to grab. That is most of what makes
+        # the lock legible: there is visibly no way in.
+        active = selected and not self.focused and not self.room.locked
         for handle in self.handles:
             handle.setVisible(active and self.edit_mode == EDIT_VERTICES)
         for handle in self.scale_handles:
             handle.setVisible(active and self.edit_mode == EDIT_RESIZE)
+
+    def _update_handle_visibility(self):
+        self._apply_handle_visibility(self.isSelected())
 
     # -- state --------------------------------------------------------------
 
@@ -462,6 +485,19 @@ class RoomItem(QGraphicsPolygonItem):
         self.edit_mode = mode
         self._update_movable()
         self._update_handle_visibility()
+        self.update()
+
+    def set_locked(self, locked):
+        """Freeze or release this room's geometry.
+
+        Goes through the same two helpers everything else does, so a locked
+        room cannot end up movable because some other code path set the flag
+        after the lock did.
+        """
+        self.room.locked = bool(locked)
+        self._update_movable()
+        self._update_handle_visibility()
+        self.update()
 
     def set_focused(self, focused):
         """Focused means "you are working inside this room".
@@ -479,18 +515,18 @@ class RoomItem(QGraphicsPolygonItem):
     def _update_movable(self):
         """Decide in ONE place whether this room can be dragged around.
 
-        Two separate things want the room held still, and having them both
+        Three separate things want the room held still, and having them each
         call setFlag independently is how you get a room that is stuck because
         one of them said no and the other never said yes again:
 
           - while it is focused, so you don't shove it while arranging drawers
-          - while editing its outline, because then a drag on the body means
-            "I am working on this shape", not "move this somewhere else"
-
-        That second one is what makes Edit shape a real mode rather than a
-        different set of dots.
+          - while it is locked, which is the whole point of the lock
+          - in any mode other than Move, because there a drag on the body
+            means "I am working on this shape or size", not "move this"
         """
-        can_move = (not self.focused) and self.edit_mode == EDIT_RESIZE
+        can_move = (not self.focused
+                    and not self.room.locked
+                    and self.edit_mode == EDIT_MOVE)
         self.setFlag(QGraphicsItem.ItemIsMovable, can_move)
         self.setCursor(Qt.OpenHandCursor if can_move else Qt.ArrowCursor)
 
@@ -507,11 +543,7 @@ class RoomItem(QGraphicsPolygonItem):
         if change == QGraphicsItem.ItemSelectedChange:
             # Qt has not applied the new value yet, so pass it in rather than
             # asking isSelected(), which would still give the old answer.
-            active = bool(value) and not self.focused
-            for handle in self.handles:
-                handle.setVisible(active and self.edit_mode == EDIT_VERTICES)
-            for handle in self.scale_handles:
-                handle.setVisible(active and self.edit_mode == EDIT_RESIZE)
+            self._apply_handle_visibility(bool(value))
 
         return super().itemChange(change, value)
 
@@ -662,6 +694,11 @@ class RoomItem(QGraphicsPolygonItem):
         pen = QPen(qcolor(color, 0.95))
         pen.setWidthF(2.5 if (selected or self.focused) else 1.6)
         pen.setJoinStyle(Qt.RoundJoin)
+        # A locked room is drawn with a dashed outline. Selecting one shows
+        # no handles, and without a visible difference that just looks like
+        # the app failing to respond to the click.
+        if self.room.locked:
+            pen.setStyle(Qt.DashLine)
         if self.focused:
             pen.setStyle(Qt.SolidLine)
             pen.setWidthF(3.0)
@@ -670,7 +707,8 @@ class RoomItem(QGraphicsPolygonItem):
 
         # While resizing, outline the bounding box faintly so it is obvious
         # what the handles are moving.
-        if selected and not self.focused and self.edit_mode == EDIT_RESIZE:
+        if (selected and not self.focused and not self.room.locked
+                and self.edit_mode == EDIT_RESIZE):
             left, top, width, height = self.room.bounds()
             box_pen = QPen(qcolor(theme.ACCENT, 0.45))
             box_pen.setWidthF(1.0)

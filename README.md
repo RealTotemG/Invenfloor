@@ -101,6 +101,10 @@ circle, triangle and L-shape: pick one and drag out the size, or just click
 once for a default. Or pick Draw room and click each corner yourself, closing
 the shape by clicking the first corner again or pressing Enter.
 
+Picking any drawing tool drops whatever was selected. Reaching for one means
+you're done with the room you were on, and leaving it selected left the
+inspector showing it, handles and all, while you drew a different one.
+
 Corners snap to the grid, which is what stops rooms sitting a pixel or two out
 of line with each other.
 
@@ -118,22 +122,42 @@ That live update goes through its own signal rather than the one that triggers
 an autosave. It fires on every mouse move, and dragging a room across the floor
 should write the file once at the end, not eighty times on the way.
 
-Switch to "Edit shape" and it becomes a genuinely different mode. You get round
-handles on every corner, the room locks in place so a drag on the body means
-"I'm working on this outline" rather than "move this", and you can change how
-many corners there are at all. Double-click a wall to add a corner, right-click
-a corner to delete it. That's how you turn a plain rectangle into an L without
-redrawing it.
+**Three modes.** A selected room does something different depending on which
+mode you're in, and the three buttons in the inspector say which:
+
+| | |
+|---|---|
+| `Move` | drag the room itself to reposition it. No handles. |
+| `Resize` | square handles stretch it, keeping its shape. The body stays put. |
+| `Edit shape` | round handles on every corner. The body stays put. |
+
+Move used to be folded into Resize, so one mode quietly did two jobs and
+nothing on screen told you that. Splitting them means a drag always means one
+thing, and you can't shove a room across the floor while reaching for a handle.
+
+Edit shape also lets you change how many corners there are. Double-click a wall
+to add one, right-click a corner to delete it. That's how you turn a plain
+rectangle into an L without redrawing it.
 
 The new corner lands on the wall you clicked rather than exactly where your
 mouse was, so the shape doesn't suddenly dent before you've asked it to. You
 add the corner, then drag it where you want.
 
-The first version of this had the two modes swapping handles and nothing else,
-and on a rectangle that's almost invisible, because all four corner handles sit
-on exactly the same spots as the four resize handles. It looked broken even
-though it worked. Locking movement and adding corner editing is what makes the
-mode worth having.
+The first version had two modes that only swapped which handles showed, and on
+a rectangle that's almost invisible, because all four corner handles sit on
+exactly the same spots as the four resize handles. It looked broken even though
+it worked. Holding the body still, adding corner editing, and eventually giving
+Move its own name is what turned them into modes you can tell apart.
+
+**Locking a room.** Once a room is where you want it, lock it from the
+inspector or the right-click menu. A locked room can't be dragged, resized or
+reshaped, shows no handles at all, and is drawn with a dashed outline so you
+can see which rooms are settled. Everything else still works: rename it,
+recolor it, tag it, and fill it with containers.
+
+That split is deliberate. The lock is about the floor plan being finished, not
+about the room being read-only, and you carry on filling a room long after you
+stop moving it.
 
 **Containers.** Pick Add container and drag a box inside a room. You can't drag
 one on empty canvas, on purpose.
@@ -141,7 +165,7 @@ one on empty canvas, on purpose.
 **Right-click anywhere on the canvas** and you get a menu for whatever is under
 the cursor. On empty space it offers Add room, with Draw room and Preset shape
 underneath it. On a room you get Add container here, the work-inside toggle,
-the handle modes, rename and delete. On a container, add an item or delete it.
+the three modes, lock, rename and delete. On a container, add an item or delete it.
 On a corner, remove that corner.
 
 **Working inside a room.** Double-click it. Everything else fades back, the

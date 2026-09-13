@@ -214,6 +214,7 @@ class LayoutSection(QWidget):
         self.inspector.focusRoomRequested.connect(self._focus_room)
         self.view.roomResized.connect(self.inspector.room_resized)
         self.inspector.resizeRoomRequested.connect(self._resize_room)
+        self.inspector.lockChanged.connect(self._set_room_locked)
         self.inspector.editModeChanged.connect(self.view.set_room_edit_mode)
         self.inspector.deletedRoom.connect(self._delete_room)
         self.inspector.deletedContainer.connect(self._delete_container)
@@ -456,6 +457,19 @@ class LayoutSection(QWidget):
             self.show_floor(index)
 
         return self.view.reveal_container(container_id)
+
+    def _set_room_locked(self, room, locked):
+        """Lock or unlock a room from the inspector.
+
+        Goes through the view rather than setting room.locked here,
+        because the shape on the canvas has to stop being draggable and
+        drop its handles at the same moment. One route in means the two
+        cannot disagree.
+        """
+        for room_item in self.view.room_items:
+            if room_item.room.id == room.id:
+                self.view.set_room_locked(room_item, locked)
+                return
 
     def _resize_room(self, room, width, height):
         # Note we do NOT rebuild the inspector afterward. The W/H boxes the
