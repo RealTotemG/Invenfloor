@@ -70,6 +70,19 @@ def profile_path(profile_id):
     return os.path.join(data_folder(), f"{profile_id}.json")
 
 
+def profile_modified(profile_id):
+    """When this profile was last written, as a timestamp, or None.
+
+    Taken from the save file itself rather than stored inside the profile,
+    because the file system is already keeping this for us and a field in the
+    JSON could drift out of step with the file it lives in.
+    """
+    try:
+        return os.path.getmtime(profile_path(profile_id))
+    except OSError:
+        return None
+
+
 def load_profiles():
     """Read every profile file and return them as Profile objects.
 

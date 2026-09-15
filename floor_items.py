@@ -893,3 +893,86 @@ class RoomItem(QGraphicsPolygonItem):
         painter.setFont(canvas_font(10))
         painter.setPen(QPen(qcolor(color, 0.85)))
         painter.drawText(name_rect, Qt.AlignRight | Qt.AlignVCenter, summary)
+
+
+# ---------------------------------------------------------------------------
+# DRAWING A FLOOR SOMEWHERE THAT ISN'T THE CANVAS
+# ---------------------------------------------------------------------------
+#
+# The app has three places that show a floor plan: the canvas you edit on, the
+# PDF export, and the preview beside the profile list. Only the first is a
+# real FloorView. The other two want a picture, not an editor.
+#
+# Rather than write the drawing twice more, both build a throwaway scene, drop
+# real RoomItems into it and ask the scene to render itself into a rectangle.
+# Every one of them is then drawn by the same paint methods above, so a fix to
+# how a room looks lands in all three at once and none can drift.
+
+PLAN_MARGIN = 60        # scene units of breathing room around a rendered plan
+
+
+class NoOpEditor:
+    """A stand-in for the FloorView.
+
+    RoomItem reports geometry changes back to its editor. Nothing is being
+    dragged when we are drawing a picture, so this absorbs the call and does
+    nothing. It saves giving RoomItem a special "no editor" mode.
+    """
+
+    def notify_changed(self):
+        pass
+
+
+def fit_inside(source, target):
+    """The biggest rectangle with `source`'s shape that fits in `target`,
+    centered.
+
+    Qt's own KeepAspectRatio scales correctly but anchors the result to the
+    top left, which on a wide panel leaves the whole plan pinned to one side
+    with the spare room in a heap on the other. Working the destination out
+    here and handing Qt a rectangle that already matches takes the question of
+    who centers it off the table.
+    """
+    if source.width() <= 0 or source.height() <= 0:
+        return QRectF(target)
+
+    scale = min(target.width() / source.width(),
+                target.height() / source.height())
+    width = source.width() * scale
+    height = source.height() * scale
+    return QRectF(target.x() + (target.width() - width) / 2,
+                  target.y() + (target.height() - height) / 2,
+                  width, height)
+
+
+def render_floor(painter, profile, floor, target, margin=PLAN_MARGIN):
+    """Draw one floor's rooms into `target`, scaled to fit and centered.
+
+    Returns False if the floor has no rooms to draw, so the caller can put its
+    own message in the space instead. Qt would collect the scene eventually,
+    but it is cleared here so a profile with twenty floors does not hold
+    twenty of them at once.
+    """
+    if floor is None or not floor.rooms:
+        return False
+
+    # Imported here rather than at the top of the file: this is the only
+    # function in the module that needs a scene, and importing QtWidgets
+    # containers at module level pulls them in for everyone.
+    from PySide6.QtWidgets import QGraphicsScene
+
+    scene = QGraphicsScene()
+    try:
+        for room in floor.rooms:
+            scene.addItem(RoomItem(room, profile, NoOpEditor()))
+
+        source = scene.itemsBoundingRect().adjusted(
+            -margin, -margin, margin, margin)
+        # IgnoreAspectRatio on a destination that already has the right shape.
+        # The fitting happened in fit_inside, where we can see it.
+        scene.render(painter, fit_inside(source, QRectF(target)), source,
+                     Qt.IgnoreAspectRatio)
+    finally:
+        scene.clear()
+
+    return True

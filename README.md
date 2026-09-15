@@ -81,11 +81,11 @@ place. A container is a thing you open.
 | `models.py` | What a profile, floor, room, container, item and tag are |
 | `storage.py` | Loading and saving. One JSON file per profile. |
 | `widgets.py` | Shared UI pieces: color picker, tag chips, dialogs |
-| `profile_screen.py` | The launcher, with the grid of profile cards |
+| `profile_screen.py` | The launcher: the profile list and its floor plan preview |
 | `workspace.py` | The sidebar shell, the autosave timer, keyboard shortcuts |
 | `layout_section.py` | Floors, toolbar, and the wiring between canvas and inspector |
 | `floor_view.py` | The canvas: grid, zoom, pan, drawing tools |
-| `floor_items.py` | How a room and a container draw and drag themselves |
+| `floor_items.py` | How a room and a container draw and drag themselves, and how a floor is rendered anywhere else |
 | `inspector.py` | The edit panel down the right |
 | `items_section.py` | The item catalog, the saved views, the tag manager |
 | `export.py` | Writing CSV and PDF. Doesn't touch any screens. |
@@ -95,6 +95,49 @@ Roughly: `models` and `storage` are the data, `theme` and `widgets` are the
 look, everything else is a screen.
 
 ## Using it
+
+**The launcher.** The app opens maximized, split in two: your profiles down
+the left, and a preview of whichever one you're pointing at on the right.
+
+Each card carries the counts (floors, rooms, containers, items), when you last
+saved it, and the one thing most worth knowing: how many items are unfiled, or
+running low, in amber. A launcher that lists nothing but names makes you open
+a profile to remember what's in it.
+
+Only one warning per card, on purpose. A card is a glance, and a glance that
+lists three problems is a card you stop reading. Right-click one for open,
+rename and delete. With nothing saved yet you get a proper welcome panel
+explaining what a profile is instead of a lone dashed square.
+
+**The preview.** Point at a card and its ground floor is drawn full size on
+the right, so you can see the room you're about to click before you click it.
+The counts tell you how much is in a profile; they can't tell you which one it
+is. A floor plan can, because you recognize your own house long before you've
+read a number.
+
+It's the ground floor and only the ground floor. Floors are kept in building
+order with the lowest at index 0, so the preview is `floors[0]` rather than a
+search, and it's the floor you'd walk in on.
+
+Pointing at a different card swaps it over. Moving off the list puts the panel
+back to "Point at a profile to see its floor plan". Leaving a *card* doesn't
+clear anything, only leaving the whole list does, because the gap between two
+cards is a place your mouse passes through and not a decision to stop looking.
+
+The preview has no drawing code of its own. It calls the same
+`floor_items.render_floor` the PDF export calls, which builds real RoomItems
+and renders them into a rectangle, so all three views of a floor plan are the
+same code. Fix how a room looks once and you've fixed it everywhere.
+
+One thing worth knowing if you touch it: building that scene takes about 12ms
+for a five-room floor and 265ms for a sixty-room one. That's fine once and far
+too slow in a `paintEvent`, which fires on every frame of a window drag. So
+the result is kept as a pixmap and only redrawn when the profile or the panel
+size changes. Everything else is a blit.
+
+Maximized rather than fullscreen. Fullscreen hides the title bar and the
+taskbar, which is right for a game and wrong for something you keep open
+beside other windows.
 
 **Drawing rooms.** Two ways. The Shape menu gives you rectangle, square,
 circle, triangle and L-shape: pick one and drag out the size, or just click
@@ -217,6 +260,13 @@ The same item can be on two tiers of one shelf. Shoes on tier 1 and shoes on
 tier 3 are two honest facts, and a placement is keyed by container AND tier, so
 both are recordable.
 
+**Getting around.** Scroll to zoom. Middle-drag or right-drag to pan. Right
+drag is the one worth knowing: it's the same button that opens the menu, so the
+press only arms a pan and the first few pixels of movement decide which gesture
+you meant. Move and it pans, stay still and you get the menu. The window system
+sends the menu request after the button comes up either way, so the view
+swallows that one when it knows a pan just happened.
+
 **Right-click anywhere on the canvas** and you get a menu for whatever is under
 the cursor. On empty space it offers Add room, with Draw room and Preset shape
 underneath it. On a room you get Add container here, the work-inside toggle,
@@ -230,7 +280,22 @@ draggable. Escape or another double-click steps back out.
 **Floors.** The stack is down the left, highest at the top, with arrows to step
 through. Press the up arrow on the top floor and it offers to create a new
 floor above rather than just doing nothing. Same going down, which is how you
-add a basement.
+add a basement. Right-click any floor in the stack for duplicate, rename and
+delete, aimed at the floor you clicked rather than the one that's selected.
+
+**Duplicating.** Ctrl+D copies the selected room or container, or use the
+right-click menu. Floors are duplicated from their own menu in the stack. A
+copy lands one grid square down and to the right, named "Kitchen copy", then
+"Kitchen copy 2", and arrives selected so you can drag it where it goes. A
+copied room comes back unlocked even if the original was locked, because it's
+a new room you're still placing.
+
+What a copy carries is structure, not contents. The rooms, their shapes, the
+containers, their sizes and tiers, all come across; the items do not. Items
+live in the catalog and point at a container by id, so a duplicated shelf
+arrives empty. That's deliberate. Copying the contents too would tell you that
+you own twice as many hammers as you do, and an inventory that lies about
+quantities is worse than no inventory.
 
 **Finding things.** Press Find on any item and the app jumps to Layout, changes
 to the right floor, selects the container and flashes it for a second. An item
@@ -262,6 +327,16 @@ actually on.
 That dialog doesn't implement any of those three. They already exist on the
 Items screen and get handed in as callbacks, so there's one implementation
 rather than two that can drift apart.
+
+**Doing several items at once.** Every row on the Items screen has a tick box.
+Tick a few and a bar appears with Add tags, Remove tags and Delete. Add and
+Remove are two buttons rather than one "set the tags to this", because items in
+a selection rarely have the same tags to begin with, and "put Fragile on all of
+these" should not quietly strip the tags they already had.
+
+The ticks are kept by item id, not by row, so they survive the list being
+rebuilt as you search and filter. Anything deleted is dropped from the
+selection on the next rebuild, so the count can't lie.
 
 **Create from search.** Search for something you don't own yet and a Create
 button appears next to the box. The new item comes pre-named, and pre-tagged
@@ -312,12 +387,18 @@ out of step with the app.
 | `Ctrl+F` | search |
 | `Ctrl+N` | new item |
 | `Ctrl+B` | add many |
+| `Ctrl+D` | duplicate the selected room or container |
 | `Esc` | cancel a tool, step out of a room |
 | `Delete` | remove whatever's selected on the canvas |
 
 All the shortcuts are defined in one place in `workspace.py`, and each one
 switches to the screen it needs on the way. Pressing Ctrl+F from the Layout
 view jumps to Items first, because that's obviously what you meant.
+
+Ctrl+D is the exception that proves the rule: it does nothing from the Items
+screen rather than jumping. "Search" is a thing you want wherever you are.
+"Copy what I picked" is not, because nothing is picked on a screen you aren't
+looking at.
 
 **Saving.** There's no save button. Any change schedules a save half a second
 later, and more changes restart the clock, so dragging a room across the floor
@@ -373,6 +454,16 @@ bottoms off the letters, and it looks like a font problem rather than a layout
 one, so you go looking in completely the wrong place. Use `setMinimumHeight`
 instead.
 
+**A dialog that changes data can't rely on being accepted.** Assign tags has a
+New tag button in it, and that tag joins the profile the moment you name it.
+Press Cancel on the item you were editing and the tag is still there, but the
+code path that saves and redraws never ran. The tag then lived in memory only:
+on screen until the next rebuild, and never written to the file at all.
+
+Anything that mutates shared data mid-dialog has to report that separately from
+its accept or reject. `TagPickerDialog.created_tags` is that report, and every
+caller acts on it either way.
+
 **A panel with no horizontal scrollbar can silently slice its own contents.**
 A `QScrollArea` hands its widget the LARGER of the viewport width and the
 widget's own minimum. So one child asking for a few pixels more than the column
@@ -402,6 +493,46 @@ looks like text cut in half or overlapping whatever's underneath.
 There's a `wrapped()` helper in `widgets.py` that does both halves. Use it
 instead of `setWordWrap`. I got this wrong in nine places before I noticed, and
 in every one of them the symptom pointed somewhere other than the cause.
+
+**An alignment flag can undo all of that.** `layout.addWidget(panel, 0,
+Qt.AlignLeft)` looks like it only says where to put something. It also tells
+the layout to give it exactly its `sizeHint` and not a pixel more, and a
+sizeHint that contains wrapped text is always short, because the hint is
+worked out before anyone knows how wide the thing will be. I measured it at
+six pixels on the welcome panel, which was enough to squeeze three lines of
+text into two and paint the third over the heading above.
+
+So it looked like the wrapping bug again, and `wrapped()` was already on every
+label in there. The fix was to drop the alignment flag and put a stretch
+beside the panel instead, which pushes it left the same way while leaving the
+layout free to give it the height it asks for. If text is overlapping and
+`wrapped()` is already in use, go and look at how the parent was added.
+
+**A fixed-width column beats a maximized window.** Once the app started
+opening maximized, the item rows stretched to nineteen hundred pixels with the
+name at one end and the buttons at the other. The list now sits in a column
+capped at `LIST_MAX_WIDTH` with a stretch either side. The stretch on the
+column is 100 against 1: with equal weights the three of them split the room
+evenly and the list ends up narrower than its own cap.
+
+**KeepAspectRatio scales but doesn't center.** `scene.render(painter, target,
+source, Qt.KeepAspectRatio)` reads like "fit this in there", and the scaling
+half is right. The placing half isn't: the result is anchored to the top left,
+so on a panel wider than the plan the whole thing sits against one edge with
+all the spare room piled up on the other. Measured at 38 pixels on one side
+and 876 on the other.
+
+`fit_inside` in `floor_items.py` works out the destination rectangle first and
+hands Qt one that already has the right shape, with `IgnoreAspectRatio`. The
+fitting then happens in eight lines you can read instead of inside a flag.
+
+**Anything expensive in a paintEvent will be felt.** `paintEvent` is not a
+"when the data changes" hook. It runs when the window is resized, uncovered,
+or scrolled past, which during a drag is every frame. The preview's first
+version rebuilt a whole QGraphicsScene in there. Fine on a five-room floor,
+a quarter of a second on a sixty-room one, which is a window you can watch
+lag behind your mouse. Do the work when the inputs change, keep the picture,
+and let paintEvent copy it.
 
 ## Changing things
 

@@ -692,6 +692,13 @@ class TagPickerDialog(QDialog):
         self._profile = profile
         self._boxes = {}
 
+        # Making a tag in here changes the profile the moment you press Save
+        # on the little name box, whatever happens to THIS dialog afterwards.
+        # Cancelling out of assigning tags does not un-create the tag, so the
+        # caller has to be told either way: otherwise the new tag sits in
+        # memory unsaved, and vanishes the next time the file is loaded.
+        self.created_tags = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(theme.SPACE_XL, theme.SPACE_XL,
                                   theme.SPACE_XL, theme.SPACE_XL)
@@ -770,6 +777,7 @@ class TagPickerDialog(QDialog):
 
         tag = Tag(name=name, color=color)
         self._profile.tags.append(tag)
+        self.created_tags = True
 
         # Remember what was already ticked, then rebuild with the new tag
         # ticked as well -- you almost certainly made it to use it right now.
@@ -1025,7 +1033,11 @@ class ItemDialog(QDialog):
 
     def _edit_tags(self):
         dialog = TagPickerDialog(self, self._profile, self._tag_ids, "item")
-        if dialog.exec():
+        accepted = dialog.exec()
+        # Recorded whether or not the assignment was accepted, because the tag
+        # itself was created regardless. See TagPickerDialog.created_tags.
+        self.created_tags = self.created_tags or dialog.created_tags
+        if accepted:
             self._tag_ids = dialog.selected_ids()
             self._chips.set_tags(self._profile.tags_for(self._tag_ids))
 
@@ -1339,6 +1351,7 @@ class BulkAddDialog(QDialog):
         self.setMinimumHeight(520)
         self._profile = profile
         self._tag_ids = []
+        self.created_tags = False
         self._queued = []           # list of (name, quantity)
 
         layout = QVBoxLayout(self)
@@ -1589,7 +1602,9 @@ class BulkAddDialog(QDialog):
 
     def _edit_tags(self):
         dialog = TagPickerDialog(self, self._profile, self._tag_ids, "batch")
-        if dialog.exec():
+        accepted = dialog.exec()
+        self.created_tags = self.created_tags or dialog.created_tags
+        if accepted:
             self._tag_ids = dialog.selected_ids()
             self._chips.set_tags(self._profile.tags_for(self._tag_ids))
         self._entry.setFocus()

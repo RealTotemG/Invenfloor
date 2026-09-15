@@ -224,9 +224,13 @@ class Inspector(QWidget):
         def edit_tags():
             dialog = TagPickerDialog(self, self.profile, subject.tag_ids,
                                      subject_name)
-            if dialog.exec():
+            accepted = dialog.exec()
+            if accepted:
                 subject.tag_ids = dialog.selected_ids()
                 chips.set_tags(self.profile.tags_for(subject.tag_ids))
+            # A tag invented in there exists now even if the assignment was
+            # cancelled, so the save has to be queued either way.
+            if accepted or dialog.created_tags:
                 self.dataChanged.emit()
 
         layout.addWidget(button("Edit tags", "ghost", edit_tags, size="sm"))

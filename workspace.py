@@ -103,6 +103,8 @@ class Workspace(QWidget):
             ("Ctrl+F", lambda: self._in_items(self.items_section.focus_search)),
             ("Ctrl+N", lambda: self._in_items(self.items_section.new_item)),
             ("Ctrl+B", lambda: self._in_items(self.items_section.bulk_add)),
+            ("Ctrl+D", lambda: self._in_layout(
+                self.layout_section.duplicate_selection)),
         ]
 
         for keys, action in bindings:
@@ -117,6 +119,18 @@ class Workspace(QWidget):
         """Switch to the Items screen, then do something there."""
         self._go(1)
         action()
+
+    def _in_layout(self, action):
+        """Do something on the Layout screen, but only while you are on it.
+
+        The opposite of _in_items on purpose. Ctrl+F means "let me search",
+        so jumping to the screen that can search is helpful. Ctrl+D means
+        "copy what I picked", and nothing is picked on a screen you are not
+        looking at -- so on the Items screen it should do nothing at all
+        rather than yank you somewhere else.
+        """
+        if self._stack.currentIndex() == 0:
+            action()
 
     # -- finding things -----------------------------------------------------------
 

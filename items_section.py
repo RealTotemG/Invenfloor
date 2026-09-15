@@ -34,19 +34,26 @@ The logic lives in Profile.misfiled_items().
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QLineEdit, QScrollArea,
-    QComboBox,
+    QComboBox, QCheckBox,
 )
 
 import theme
 from models import NAME_MAX_LENGTH, Item, Tag, clean_name, short
 from widgets import (
     BulkAddDialog, ItemDialog, NameColorDialog, TagChipRow,
-    TagManagerDialog, button, confirm,
+    TagManagerDialog, TagPickerDialog, button, confirm,
     empty_state, full_path, label, path_label, short_label, short_path,
     tag_chip, tier_suffix, wrapped,
 )
 
 TAG_PANEL_WIDTH = 270
+
+# The widest the item list is allowed to get, whatever the window does. On a
+# maximized screen a row left to fill 1900 pixels puts the name at one edge
+# and the buttons at the other, with half a metre of nothing between them and
+# your eyes travelling the whole way. Past about this width a list stops
+# getting easier to read and starts getting harder.
+LIST_MAX_WIDTH = 1100
 
 # The saved views. Plain strings so they read clearly in the debugger.
 VIEW_ALL = "all"
@@ -75,6 +82,9 @@ class ItemsSection(QWidget):
         # Which rows are showing their per-place breakdown. Kept by id rather
         # than by object so it survives the list being rebuilt.
         self.expanded_ids = set()
+        # Which rows are ticked for a bulk action. Also by id, and for the
+        # same reason: the list is thrown away and rebuilt constantly.
+        self.selected_ids = set()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -88,9 +98,16 @@ class ItemsSection(QWidget):
 
         body.addWidget(self._build_tag_panel())
 
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        right.addWidget(self._build_selection_bar())
+
         self._items_scroll = QScrollArea()
         self._items_scroll.setWidgetResizable(True)
-        body.addWidget(self._items_scroll, 1)
+        right.addWidget(self._items_scroll, 1)
+
+        body.addLayout(right, 1)
 
         outer.addLayout(body, 1)
 
@@ -162,6 +179,139 @@ class ItemsSection(QWidget):
                                 "Add one item  (Ctrl+N)"))
 
         return bar
+
+    # -- picking several at once --------------------------------------------
+
+    def _build_selection_bar(self):
+        """The strip that appears once something is ticked.
+
+        Hidden entirely when nothing is selected rather than sitting there
+        greyed out. An empty toolbar for a thing you are not doing is just a
+        row of noise above the list you ARE looking at.
+        """
+        self._selection_bar = QFrame()
+        self._selection_bar.setObjectName("topBar")
+        self._selection_bar.hide()
+
+        layout = QHBoxLayout(self._selection_bar)
+        layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_SM,
+                                  theme.SPACE_LG, theme.SPACE_SM)
+        layout.setSpacing(theme.SPACE_SM)
+
+        self._selection_label = QLabel("")
+        self._selection_label.setStyleSheet(f"color: {theme.TEXT};")
+        layout.addWidget(self._selection_label)
+
+        layout.addStretch()
+
+        layout.addWidget(button("Add tags", "ghost", self._tag_selected, size="sm",
+                                tooltip="Put tags on everything ticked"))
+        layout.addWidget(button("Remove tags", "ghost", self._untag_selected,
+                                size="sm",
+                                tooltip="Take tags off everything ticked"))
+        layout.addWidget(button("Clear", "ghost", self._clear_selection,
+                                size="sm"))
+
+        delete = button("Delete", "ghost", self._delete_selected, size="sm")
+        delete.setProperty("kind", "danger")
+        layout.addWidget(delete)
+
+        return self._selection_bar
+
+    def _set_selected(self, item, selected):
+        if selected:
+            self.selected_ids.add(item.id)
+        else:
+            self.selected_ids.discard(item.id)
+        self._refresh_selection_bar()
+
+    def _refresh_selection_bar(self):
+        count = len(self.selected_ids)
+        self._selection_bar.setVisible(count > 0)
+        self._selection_label.setText(
+            f"{count} item" + ("" if count == 1 else "s") + " selected")
+
+    def _clear_selection(self):
+        self.selected_ids.clear()
+        self._rebuild_items()
+
+    def _selected_items(self):
+        """The ticked items, in the order the catalog holds them."""
+        return [i for i in self.profile.items if i.id in self.selected_ids]
+
+    def _tag_selected(self):
+        """Add tags to everything ticked.
+
+        The dialog opens with nothing ticked on purpose, because this is "put
+        these tags on" rather than "make the tags be exactly this". Showing
+        the tags one of the items already has would invite you to untick one
+        and expect it removed, which is what the other button is for.
+        """
+        chosen = self._pick_tags("Tag these items")
+        if chosen is None:
+            return
+
+        for item in self._selected_items():
+            for tag_id in chosen:
+                if tag_id not in item.tag_ids:
+                    item.tag_ids.append(tag_id)
+            item.touch()
+
+        self.dataChanged.emit()
+        self.reload()
+
+    def _untag_selected(self):
+        """Take tags off everything ticked, leaving their other tags alone."""
+        chosen = self._pick_tags("Remove these tags")
+        if chosen is None:
+            return
+
+        for item in self._selected_items():
+            kept = [t for t in item.tag_ids if t not in chosen]
+            if kept != item.tag_ids:
+                item.tag_ids = kept
+                item.touch()
+
+        self.dataChanged.emit()
+        self.reload()
+
+    def _pick_tags(self, subject):
+        """Open the tag picker and return the ticked ids, or None if cancelled.
+
+        A tag created in there is absorbed either way, the same as everywhere
+        else that opens this dialog.
+        """
+        dialog = TagPickerDialog(self, self.profile, [], subject)
+        accepted = dialog.exec()
+        if not accepted:
+            self._absorb_new_tags(dialog)
+            return None
+
+        chosen = dialog.selected_ids()
+        if dialog.created_tags:
+            self.dataChanged.emit()
+        return chosen or None
+
+    def _delete_selected(self):
+        items = self._selected_items()
+        if not items:
+            return
+
+        if not confirm(
+            self, "Delete items",
+            f"Delete {len(items)} item" + ("" if len(items) == 1 else "s")
+            + "?\n\nThey are removed from every container they were in. "
+              "The containers and rooms stay.",
+            danger_text=f"Delete {len(items)}"
+        ):
+            return
+
+        gone = {i.id for i in items}
+        self.profile.items = [i for i in self.profile.items
+                              if i.id not in gone]
+        self.selected_ids.clear()
+        self.dataChanged.emit()
+        self.reload()
 
     def _on_search(self, text):
         self.search_text = text.strip().lower()
@@ -239,6 +389,7 @@ class ItemsSection(QWidget):
     def new_item(self):
         dialog = ItemDialog(self, self.profile)
         if not dialog.exec():
+            self._absorb_new_tags(dialog)
             return
         values = dialog.result_values()
         if not values["name"]:
@@ -251,6 +402,7 @@ class ItemsSection(QWidget):
     def bulk_add(self):
         dialog = BulkAddDialog(self, self.profile)
         if not dialog.exec():
+            self._absorb_new_tags(dialog)
             return
 
         created = dialog.result_items()
@@ -464,9 +616,32 @@ class ItemsSection(QWidget):
 
     def _rebuild_items(self):
         holder = QWidget()
-        layout = QVBoxLayout(holder)
-        layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_LG,
-                                  theme.SPACE_LG, theme.SPACE_LG)
+        holder.setObjectName("plain")
+
+        # The rows go in a column of their own, capped and centered, rather
+        # than straight into the holder. A stretch on each side rather than an
+        # alignment flag: an alignment flag makes the layout hand the column
+        # exactly its sizeHint, which is always short for anything containing
+        # wrapped text -- and the empty states below all wrap.
+        frame = QHBoxLayout(holder)
+        frame.setContentsMargins(theme.SPACE_LG, theme.SPACE_LG,
+                                 theme.SPACE_LG, theme.SPACE_LG)
+        frame.setSpacing(0)
+        frame.addStretch(1)
+
+        column = QWidget()
+        column.setObjectName("plain")
+        column.setMaximumWidth(LIST_MAX_WIDTH)
+        self._items_column = column
+        # A large stretch against two small ones, so the column always takes
+        # everything it is allowed to and the spacers only get what is left
+        # over. Equal stretches would split the room three ways and leave the
+        # list narrower than its cap on a window wide enough to reach it.
+        frame.addWidget(column, 100)
+        frame.addStretch(1)
+
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(theme.SPACE_SM)
 
         unfiled = len(self.profile.unfiled_items())
@@ -487,6 +662,12 @@ class ItemsSection(QWidget):
                    if self.active_view == VIEW_MISFILED else {})
 
         items = self._visible_items()
+
+        # Drop ticks for anything that no longer exists, so a deleted item
+        # cannot linger in the selection and make the count lie.
+        alive = {i.id for i in self.profile.items}
+        self.selected_ids &= alive
+        self._refresh_selection_bar()
 
         if not items:
             layout.addWidget(self._empty_for_view())
@@ -583,6 +764,13 @@ class ItemsSection(QWidget):
         outer.setContentsMargins(theme.SPACE_MD, theme.SPACE_SM,
                                  theme.SPACE_MD, theme.SPACE_SM)
         outer.setSpacing(theme.SPACE_MD)
+
+        tick = QCheckBox()
+        tick.setChecked(item.id in self.selected_ids)
+        tick.setToolTip("Pick several, then tag or delete them together")
+        tick.toggled.connect(
+            lambda on, i=item: self._set_selected(i, on))
+        outer.addWidget(tick)
 
         stripe = QFrame()
         stripe.setFixedWidth(3)
@@ -745,6 +933,8 @@ class ItemsSection(QWidget):
     def _edit_item(self, item):
         dialog = ItemDialog(self, self.profile, item=item)
         if not dialog.exec():
+            # Cancelled, but a tag made along the way is still a real tag.
+            self._absorb_new_tags(dialog)
             return
         values = dialog.result_values()
         if not values["name"]:
@@ -784,6 +974,18 @@ class ItemsSection(QWidget):
                                   on_delete=self._delete_tag)
         dialog.exec()
         self.reload()
+
+    def _absorb_new_tags(self, dialog):
+        """Save and redraw if a dialog invented a tag before being cancelled.
+
+        Creating a tag from inside Assign tags adds it to the profile there
+        and then. Pressing Cancel on the dialog you were in does not undo
+        that, so without this the tag sits in memory: on screen until the next
+        rebuild, and never written to the file at all.
+        """
+        if getattr(dialog, "created_tags", False):
+            self.dataChanged.emit()
+            self.reload()
 
     def _add_tag(self):
         dialog = NameColorDialog(self, "New tag", "",

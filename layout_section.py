@@ -24,7 +24,7 @@ from floor_view import (
     FloorView, MODE_ADD_BOX, MODE_ADD_SHAPE, MODE_DRAW_ROOM, MODE_SELECT,
 )
 from inspector import Inspector
-from models import Floor, ROOM_PRESETS, short
+from models import Floor, ROOM_PRESETS, copy_name, duplicate_floor, short
 from widgets import (
     ElidingLabel, NameColorDialog, button, confirm, divider, label,
 )
@@ -45,6 +45,7 @@ class FloorStrip(QWidget):
     createRequested = Signal(str)        # "above" or "below"
     editRequested = Signal(int)
     deleteRequested = Signal(int)
+    duplicateRequested = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -167,10 +168,33 @@ class FloorStrip(QWidget):
         # a function to an instance like this is a small Python trick that
         # saves writing a whole subclass for one line of behavior.
         def on_click(event, i=index):
-            self.floorSelected.emit(i)
+            if event.button() == Qt.LeftButton:
+                self.floorSelected.emit(i)
+
+        def on_menu(event, i=index):
+            self.row_menu(i, event.globalPos())
 
         row.mouseReleaseEvent = on_click
+        row.contextMenuEvent = on_menu
         return row
+
+    def row_menu(self, index, global_point):
+        """The right-click menu on a floor row.
+
+        The same actions as the buttons at the foot of the strip, but aimed at
+        the floor you clicked rather than the one that happens to be selected.
+        Right-clicking a floor is you pointing at it, so pointing is enough --
+        you should not have to select it first.
+        """
+        menu = QMenu(self)
+        menu.addAction("Duplicate floor",
+                       lambda: self.duplicateRequested.emit(index))
+        menu.addAction("Rename floor",
+                       lambda: self.editRequested.emit(index))
+        menu.addSeparator()
+        menu.addAction("Delete floor",
+                       lambda: self.deleteRequested.emit(index))
+        menu.exec(global_point)
 
 
 class LayoutSection(QWidget):
@@ -198,6 +222,7 @@ class LayoutSection(QWidget):
         self.strip.createRequested.connect(self._create_floor)
         self.strip.editRequested.connect(self._edit_floor)
         self.strip.deleteRequested.connect(self._delete_floor)
+        self.strip.duplicateRequested.connect(self._duplicate_floor)
         body.addWidget(self.strip)
 
         self.view = FloorView()
@@ -447,6 +472,16 @@ class LayoutSection(QWidget):
                 self.view.set_focused_room(room_item)
                 return
 
+    def duplicate_selection(self):
+        """Ctrl+D. Copies whichever room or container is selected.
+
+        A passthrough, because the canvas is the only thing that knows what is
+        selected, and the shortcut is registered up in the workspace. Floors
+        are deliberately not included: they are duplicated from their own
+        right-click menu, where you can see which one you are pointing at.
+        """
+        self.view.duplicate_selection()
+
     def reveal_container(self, container_id):
         """Jump to a container: switch floors if needed, then flash it.
 
@@ -559,6 +594,26 @@ class LayoutSection(QWidget):
         floor.color = color
         self.refresh()
         self.dataChanged.emit()
+
+    def _duplicate_floor(self, index):
+        """Copy a floor with its rooms and containers, but not their contents.
+
+        Items live in the catalog and only point at containers, so a copied
+        shelf arrives empty. That is on purpose: copying the contents would
+        tell you that you own twice as many things as you actually do. The
+        copy lands directly above the original and opens straight away, since
+        you duplicated it to work on it.
+        """
+        if self.profile is None or not (0 <= index < len(self.profile.floors)):
+            return
+
+        floor = self.profile.floors[index]
+        made = duplicate_floor(floor, copy_name(
+            floor.name, [f.name for f in self.profile.floors]))
+        self.profile.floors.insert(index + 1, made)
+
+        self.dataChanged.emit()
+        self.show_floor(index + 1)
 
     def _delete_floor(self, index):
         if self.profile is None or not (0 <= index < len(self.profile.floors)):

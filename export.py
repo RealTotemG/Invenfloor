@@ -19,14 +19,11 @@ from datetime import datetime
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPdfWriter
-from PySide6.QtWidgets import QGraphicsScene
 
 import floor_items
 import theme
-from floor_items import RoomItem
 
 PDF_RESOLUTION = 150        # dots per inch
-PLAN_MARGIN = 60            # scene units of breathing room around the plan
 
 
 # ---------------------------------------------------------------------------
@@ -84,26 +81,14 @@ def export_items_csv(profile, path):
 # PDF FLOOR PLANS
 # ---------------------------------------------------------------------------
 
-class _NoOpEditor:
-    """A stand-in for the FloorView.
-
-    RoomItem reports geometry changes back to its editor. Nothing is being
-    dragged here -- we are drawing to paper -- so this absorbs the call and
-    does nothing. It saves giving RoomItem a special "no editor" mode just for
-    printing.
-    """
-
-    def notify_changed(self):
-        pass
-
-
 def export_floors_pdf(profile, path):
     """Render every floor as one landscape page.
 
-    The rooms are drawn by exactly the same code that draws them on screen --
-    we build a throwaway scene, put real RoomItems in it, and ask the scene to
-    render itself into the page. So the printout can never drift out of step
-    with the app: fix a drawing bug once and both are fixed.
+    The rooms are drawn by exactly the same code that draws them on screen.
+    floor_items.render_floor builds a throwaway scene of real RoomItems and
+    renders it into a rectangle, and the canvas, this, and the preview on the
+    launcher all go through it. So the printout can never drift out of step
+    with the app: fix a drawing bug once and all three are fixed.
 
     Returns the number of pages written.
     """
@@ -148,20 +133,6 @@ def _draw_floor_page(painter, writer, profile, floor):
 
     _draw_header(painter, page, margin, profile, floor)
 
-    if not floor.rooms:
-        painter.setFont(_font(11))
-        painter.setPen(QColor(theme.TEXT_FAINT))
-        painter.drawText(page, Qt.AlignCenter, "No rooms on this floor yet.")
-        return
-
-    # Build a scene holding this floor's rooms, exactly as the app would.
-    scene = QGraphicsScene()
-    for room in floor.rooms:
-        scene.addItem(RoomItem(room, profile, _NoOpEditor()))
-
-    source = scene.itemsBoundingRect().adjusted(
-        -PLAN_MARGIN, -PLAN_MARGIN, PLAN_MARGIN, PLAN_MARGIN)
-
     target = QRectF(
         margin,
         margin * 2,
@@ -169,13 +140,13 @@ def _draw_floor_page(painter, writer, profile, floor):
         page.height() - margin * 3.2,
     )
 
-    scene.render(painter, target, source, Qt.KeepAspectRatio)
+    if not floor_items.render_floor(painter, profile, floor, target):
+        painter.setFont(_font(11))
+        painter.setPen(QColor(theme.TEXT_FAINT))
+        painter.drawText(page, Qt.AlignCenter, "No rooms on this floor yet.")
+        return
 
     _draw_footer(painter, page, margin, profile, floor)
-
-    # Qt would clean the scene up eventually, but doing it here keeps the
-    # peak memory down when a profile has a lot of floors.
-    scene.clear()
 
 
 def _draw_header(painter, page, margin, profile, floor):

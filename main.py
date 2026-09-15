@@ -45,6 +45,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Inventory")
+        # The size to fall back to, not the size you start at -- main() opens
+        # the window maximized. This is what you get when you un-maximize it,
+        # so it wants to be a comfortable working size rather than a token one.
         self.resize(1400, 880)
         self.setMinimumSize(1080, 680)
 
@@ -94,7 +97,12 @@ def main():
     application.setStyleSheet(theme.stylesheet())
 
     window = MainWindow()
-    window.show()
+
+    # Maximized, not fullscreen. Fullscreen hides the title bar and the
+    # taskbar, which is right for a game and wrong for something you keep
+    # open beside other windows. Maximized fills the screen you have and
+    # still lets you drag the window down or alt-tab away.
+    window.showMaximized()
 
     # exec() runs until the last window closes. sys.exit passes the result on
     # as the process exit code.

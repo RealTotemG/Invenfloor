@@ -135,6 +135,77 @@ def short(text, limit=NAME_DISPLAY_LENGTH):
 
 
 # ---------------------------------------------------------------------------
+# COPYING
+# ---------------------------------------------------------------------------
+
+def copy_name(original, taken):
+    """"Kitchen" becomes "Kitchen copy", then "Kitchen copy 2", and so on.
+
+    `taken` is every name already in use alongside this one. Duplicating the
+    same room five times should give five tellable-apart names rather than
+    five things all called "Kitchen copy".
+
+    The result respects the same length cap as a typed name, so a duplicate of
+    a name that is already at the limit does not quietly exceed it.
+    """
+    taken = {str(name).strip().lower() for name in taken}
+
+    attempt = 1
+    while True:
+        suffix = " copy" if attempt == 1 else f" copy {attempt}"
+        # Trim the ORIGINAL, not the suffix, so the part that makes the name
+        # unique is the part that always survives.
+        room_for_base = NAME_MAX_LENGTH - len(suffix)
+        candidate = original.strip()[:room_for_base].strip() + suffix
+        if candidate.lower() not in taken:
+            return candidate
+        attempt += 1
+
+
+def duplicate(thing, name=None):
+    """A deep copy of a room or a container, with brand new ids.
+
+    Works by writing the thing out as a dictionary and reading it back, which
+    is the same round trip that saving and loading already does. That is the
+    point: there is no second copy of "what a room consists of" to keep in
+    step, so a field added to to_dict is duplicated from the day it exists.
+
+    Nothing inside a container comes along. Items live in the catalog and say
+    which containers they are in, so a duplicated shelf is a shelf of the same
+    size, color and tiers, standing empty. Copying the contents too would mean
+    claiming you own twice as many shoes as you do.
+    """
+    made = type(thing).from_dict(thing.to_dict())
+    made.id = new_id()
+
+    for container in getattr(made, "containers", []):
+        container.id = new_id()
+
+    if name is not None:
+        made.name = name
+    return made
+
+
+def duplicate_floor(floor, name=None):
+    """A deep copy of a floor, with every room and container inside it new.
+
+    Same round trip as duplicate() above, one level up: new ids all the way
+    down so nothing in the copy points at anything in the original.
+    """
+    made = Floor.from_dict(floor.to_dict())
+    made.id = new_id()
+
+    for room in made.rooms:
+        room.id = new_id()
+        for container in room.containers:
+            container.id = new_id()
+
+    if name is not None:
+        made.name = name
+    return made
+
+
+# ---------------------------------------------------------------------------
 # TAG
 # ---------------------------------------------------------------------------
 

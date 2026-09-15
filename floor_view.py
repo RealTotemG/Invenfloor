@@ -49,7 +49,7 @@ from floor_items import (
     EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES, ContainerItem, RoomItem,
     VertexHandle, snap, snap_point, qcolor,
 )
-from models import Container, Room, ROOM_PRESETS
+from models import Container, Room, ROOM_PRESETS, copy_name, duplicate
 
 # The modes. Plain strings keep them readable in the debugger and in the
 # toolbar code.
@@ -64,6 +64,7 @@ SCENE_SIZE = 8000        # how far you can pan in any direction
 MIN_ZOOM = 0.25
 MAX_ZOOM = 4.0
 CLOSE_DISTANCE = 18      # click this close to the first corner to close a shape
+DRAG_THRESHOLD = 4       # move this far with the right button and it is a pan
 
 
 class FloorView(QGraphicsView):
@@ -92,6 +93,12 @@ class FloorView(QGraphicsView):
         self._zoom = 1.0
         self._panning = False
         self._pan_start = None
+        # Right button state: where it went down, whether it has moved far
+        # enough to count as a pan, and whether the menu that follows should
+        # be swallowed because it has.
+        self._right_press = None
+        self._right_panned = False
+        self._swallow_menu = False
         self._draft_points = []      # corners placed so far in DRAW_ROOM
         self._draft_item = None      # the dashed preview of that shape
         self._box_origin = None      # where an ADD_BOX drag started
@@ -266,6 +273,81 @@ class FloorView(QGraphicsView):
         """Called by the shapes when they are dragged. Triggers an autosave."""
         self.dataChanged.emit()
 
+    # -- duplicating ---------------------------------------------------------
+
+    def duplicate_selection(self):
+        """Ctrl+D. Copy whatever is selected on the canvas.
+
+        Containers are checked first. A container sits inside a room, so when
+        one is selected the room usually is not, but if both somehow are then
+        the smaller, more specific thing is what you meant.
+        """
+        for room_item in self.room_items:
+            for container_item in room_item.container_items:
+                if container_item.isSelected():
+                    self.duplicate_container(container_item.container)
+                    return
+
+        for room_item in self.room_items:
+            if room_item.isSelected():
+                self.duplicate_room(room_item.room)
+                return
+
+    def duplicate_room(self, room):
+        """Copy a room, its shape, its tags and its containers.
+
+        The copy lands one grid square down and right so it is visibly a
+        second thing rather than sitting exactly on top of the original, and
+        it arrives selected so the next thing you do lands on the copy.
+        """
+        if self.floor is None:
+            return
+
+        made = duplicate(room, copy_name(
+            room.name, [r.name for r in self.floor.rooms]))
+        made.x = room.x + theme.GRID_SIZE
+        made.y = room.y + theme.GRID_SIZE
+        # A duplicate of a locked room is a new room you are still placing,
+        # so it does not inherit the lock.
+        made.locked = False
+
+        self.floor.rooms.append(made)
+
+        item = RoomItem(made, self.profile, self)
+        item.set_edit_mode(self.room_edit_mode)
+        self.scene().addItem(item)
+        self.room_items.append(item)
+
+        self.scene().clearSelection()
+        item.setSelected(True)
+        self.dataChanged.emit()
+
+    def duplicate_container(self, container):
+        """Copy a container inside the same room.
+
+        Offset like a room copy, then clamped by resize_to, so duplicating a
+        container already against the far wall puts the copy beside it rather
+        than outside the room.
+        """
+        for room_item in self.room_items:
+            if container not in room_item.room.containers:
+                continue
+
+            made = duplicate(container, copy_name(
+                container.name, [c.name for c in room_item.room.containers]))
+            item = room_item.add_container(made)
+            item.resize_to(container.x + theme.GRID_SIZE,
+                           container.y + theme.GRID_SIZE,
+                           container.w, container.h)
+            item.set_editable(room_item.focused)
+
+            # No dataChanged here: add_container already asked for a save, and
+            # the autosave is debounced, so the copy's final position is what
+            # actually reaches the disk.
+            self.scene().clearSelection()
+            item.setSelected(True)
+            return
+
     def set_room_locked(self, room_item, locked):
         """Lock or unlock one room, and save the change."""
         room_item.set_locked(locked)
@@ -406,14 +488,36 @@ class FloorView(QGraphicsView):
 
     # -- mouse ---------------------------------------------------------------------
 
+    def _pan_by(self, delta):
+        """Scroll the view by a mouse delta.
+
+        Panning by moving the scrollbars keeps the scene coordinates
+        untouched, which matters: nothing else in the app has to know the view
+        has been scrolled.
+        """
+        self.horizontalScrollBar().setValue(
+            self.horizontalScrollBar().value() - int(delta.x()))
+        self.verticalScrollBar().setValue(
+            self.verticalScrollBar().value() - int(delta.y()))
+
     def mousePressEvent(self, event):
         scene_point = self.mapToScene(event.position().toPoint())
 
-        # Middle button always pans, whatever mode we are in.
+        # Middle and right both pan, whatever mode we are in.
+        #
+        # Right needs one extra idea: a right click that does not move is
+        # still a request for the context menu. So the press only ARMS a pan,
+        # and the first mouse move past a few pixels turns it into a real one.
+        # Release then decides which gesture it was.
         if event.button() == Qt.MiddleButton:
             self._panning = True
             self._pan_start = event.position()
             self.setCursor(Qt.ClosedHandCursor)
+            return
+
+        if event.button() == Qt.RightButton:
+            self._right_press = event.position()
+            self._right_panned = False
             return
 
         if self.mode == MODE_DRAW_ROOM and event.button() == Qt.LeftButton:
@@ -437,16 +541,30 @@ class FloorView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # An armed right button turns into a pan once it has actually moved.
+        # Without the threshold the tiny wobble in a normal click would count
+        # as a drag and swallow the menu.
+        if self._right_press is not None and (event.buttons() & Qt.RightButton):
+            travelled = event.position() - self._right_press
+            if (not self._right_panned
+                    and max(abs(travelled.x()),
+                            abs(travelled.y())) < DRAG_THRESHOLD):
+                return
+
+            if not self._right_panned:
+                self._right_panned = True
+                self.setCursor(Qt.ClosedHandCursor)
+
+            self._pan_by(event.position() - self._right_press)
+            self._right_press = event.position()
+            return
+
         if self._panning:
             # Panning by moving the scrollbars keeps the scene coordinates
             # untouched, which matters -- nothing else in the app has to know
             # the view has been scrolled.
-            delta = event.position() - self._pan_start
+            self._pan_by(event.position() - self._pan_start)
             self._pan_start = event.position()
-            self.horizontalScrollBar().setValue(
-                self.horizontalScrollBar().value() - int(delta.x()))
-            self.verticalScrollBar().setValue(
-                self.verticalScrollBar().value() - int(delta.y()))
             return
 
         scene_point = self.mapToScene(event.position().toPoint())
@@ -466,6 +584,16 @@ class FloorView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton and self._right_press is not None:
+            self._right_press = None
+            if self._right_panned:
+                # It was a pan, so the menu that Qt is about to ask for is not
+                # what the person meant. contextMenuEvent checks this flag.
+                self._swallow_menu = True
+                self.setCursor(Qt.ArrowCursor if self.mode == MODE_SELECT
+                               else Qt.CrossCursor)
+            return
+
         if event.button() == Qt.MiddleButton and self._panning:
             self._panning = False
             self.setCursor(Qt.ArrowCursor if self.mode == MODE_SELECT
@@ -767,6 +895,12 @@ class FloorView(QGraphicsView):
         actions that make sense for it. A menu offering "Delete room" when you
         clicked bare canvas is worse than no menu at all.
         """
+        # A right drag just panned the view, so the menu the window system is
+        # now offering is the tail end of a gesture that meant something else.
+        if self._swallow_menu:
+            self._swallow_menu = False
+            return
+
         if self.profile is None or self.floor is None:
             return
 
@@ -862,6 +996,8 @@ class FloorView(QGraphicsView):
             lambda: self.set_room_locked(room_item, not locked))
 
         menu.addSeparator()
+        menu.addAction("Duplicate room   Ctrl+D").triggered.connect(
+            lambda: self.duplicate_room(room_item.room))
         menu.addAction("Rename…").triggered.connect(
             lambda: self.renameRequested.emit(room_item.room))
         menu.addAction("Delete room").triggered.connect(
@@ -874,6 +1010,8 @@ class FloorView(QGraphicsView):
         menu.addAction("Add item here…").triggered.connect(
             lambda: self.addItemRequested.emit(container_item.container))
         menu.addSeparator()
+        menu.addAction("Duplicate container   Ctrl+D").triggered.connect(
+            lambda: self.duplicate_container(container_item.container))
         menu.addAction("Rename…").triggered.connect(
             lambda: self.renameRequested.emit(container_item.container))
         menu.addAction("Delete container").triggered.connect(
