@@ -15,12 +15,14 @@ entirely without touching this file.
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QFrame, QLabel,
-    QSpinBox, QButtonGroup,
+    QSpinBox, QButtonGroup, QComboBox,
 )
 
 import theme
 from floor_items import EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES
-from models import Container, Item, Room, short
+from models import (
+    CONTAINER_HEIGHTS, Container, Item, Room, height_name, short,
+)
 from widgets import (
     ColorPicker, ItemDialog, MoveToTierDialog, TagChipRow, TagPickerDialog,
     button, confirm,
@@ -42,6 +44,7 @@ class Inspector(QWidget):
     lockChanged = Signal(object, bool)                   # room, locked
     resizeContainerRequested = Signal(object, float, float)  # container, w, h
     tierCountChanged = Signal(object, int)               # container, tiers
+    heightChanged = Signal(object, float)                # container, height
     editModeChanged = Signal(str)
 
     def __init__(self, parent=None):
@@ -525,6 +528,40 @@ class Inspector(QWidget):
             field.setValue(int(round(value)))
             field.blockSignals(False)
 
+    def _height_block(self, layout, container):
+        """How tall the container stands, for the 3D room view.
+
+        A dropdown of four presets rather than a number box, because "waist
+        high" is something you know about your own furniture and "72" is not.
+        The 3D view's own handle can still drag it to anything in between, and
+        when it has, this shows the nearest preset so the box is never blank.
+        """
+        layout.addSpacing(theme.SPACE_XS)
+        layout.addWidget(label("Height", "caption"))
+
+        picker = QComboBox()
+        for name, value in CONTAINER_HEIGHTS:
+            picker.addItem(name, value)
+
+        # Match on the nearest preset, not an exact value, so a container the
+        # 3D handles left at 83 still shows something.
+        showing = height_name(container.height)
+        picker.blockSignals(True)
+        picker.setCurrentIndex(max(picker.findText(showing), 0))
+        picker.blockSignals(False)
+
+        picker.currentIndexChanged.connect(
+            lambda index: self.heightChanged.emit(
+                container, float(picker.itemData(index))))
+        layout.addWidget(picker)
+
+        note = QLabel("Only the 3D room view uses this. The flat floor plan "
+                      "looks the same whatever you pick.")
+        wrapped(note, grow=False)
+        note.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(note)
+
     def _tiers_block(self, layout, container):
         """Add tier / Remove tier, and what the tiers mean.
 
@@ -690,6 +727,7 @@ class Inspector(QWidget):
 
         layout.addSpacing(theme.SPACE_XS)
         self._container_size_block(layout, container)
+        self._height_block(layout, container)
         self._tiers_block(layout, container)
 
         self._tags_block(layout, container, "container")

@@ -20,6 +20,8 @@ Two things live in this file:
    touching them individually.
 """
 
+from PySide6.QtGui import QColor
+
 # ---------------------------------------------------------------------------
 # PALETTE
 # ---------------------------------------------------------------------------
@@ -105,6 +107,12 @@ FONT_SIZE_XL = 22  # screen titles
 GRID_SIZE = 20
 GRID_MAJOR_EVERY = 5
 
+# How far the "Back to floor plan" button sits from the top left corner of
+# the canvas. Both canvases put one there, and the 3D toggle can swap one for
+# the other at any moment, so they read the number from the same place rather
+# than each keeping their own.
+CANVAS_EXIT_MARGIN = 14
+
 
 # ---------------------------------------------------------------------------
 # HELPERS
@@ -123,6 +131,20 @@ def with_alpha(hex_color, alpha):
     green = int(hex_color[2:4], 16)
     blue = int(hex_color[4:6], 16)
     return f"rgba({red}, {green}, {blue}, {alpha})"
+
+
+def qcolor(hex_color, alpha=1.0):
+    """A QColor from one of our hex strings, optionally see-through.
+
+    Use this and never QColor(with_alpha(...)). with_alpha returns the CSS
+    string "rgba(79, 124, 255, 0.16)", which is what a Qt STYLESHEET wants and
+    is not something QColor can parse. Hand it one and QColor quietly gives
+    you opaque black, so a faded highlight turns into a solid slab and you go
+    looking for the bug in your drawing code.
+    """
+    color = QColor(hex_color)
+    color.setAlphaF(alpha)
+    return color
 
 
 def mix(hex_color, other_hex, amount):
@@ -309,6 +331,22 @@ def stylesheet():
     QPushButton[kind="ghost"]:hover {{
         background-color: {BG_HOVER};
         color: {TEXT};
+    }}
+
+    /* The way out of a room, floating in the corner of the canvas. Solid and
+       outlined rather than ghosted: it sits on top of a drawing, and a
+       see-through button over a busy floor plan is invisible at exactly the
+       moment someone is looking for it. */
+    QPushButton#canvasExit {{
+        background-color: {BG_CARD};
+        border: 1px solid {BORDER_LIGHT};
+        color: {TEXT};
+        padding: 7px 14px;
+        font-weight: 600;
+    }}
+    QPushButton#canvasExit:hover {{
+        background-color: {BG_HOVER};
+        border-color: {ACCENT};
     }}
 
     /* Smaller buttons for dense rows. These reduce the PADDING rather than

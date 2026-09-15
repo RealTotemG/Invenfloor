@@ -16,7 +16,7 @@ here.
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QButtonGroup,
-    QScrollArea, QMenu,
+    QScrollArea, QMenu, QStackedWidget,
 )
 
 import theme
@@ -24,9 +24,11 @@ from floor_view import (
     FloorView, MODE_ADD_BOX, MODE_ADD_SHAPE, MODE_DRAW_ROOM, MODE_SELECT,
 )
 from inspector import Inspector
+from room_view_3d import RoomView3D
 from models import Floor, ROOM_PRESETS, copy_name, duplicate_floor, short
 from widgets import (
-    ElidingLabel, NameColorDialog, button, confirm, divider, label,
+    ElidingLabel, NameColorDialog, ToggleSwitch, button, confirm, divider,
+    label,
 )
 
 STRIP_WIDTH = 190
@@ -232,7 +234,23 @@ class LayoutSection(QWidget):
         self.view.modeChanged.connect(self._on_mode_changed)
         self.view.renameRequested.connect(self._rename_subject)
         self.view.addItemRequested.connect(self._add_item_to_container)
-        body.addWidget(self.view, 1)
+
+        # The flat canvas and the 3D room view take turns in the same slot.
+        # Only one is ever visible, and the 3D one only while you are inside a
+        # room with the toggle on, so with 3D off this stack behaves exactly
+        # as the plain canvas always did.
+        self.room_3d = RoomView3D()
+        self.room_3d.itemSelected.connect(self._on_item_selected)
+        self.room_3d.dataChanged.connect(self._on_data_changed)
+        self.room_3d.addItemRequested.connect(self._add_item_to_container)
+        self.room_3d.renameRequested.connect(self._rename_subject)
+        self.room_3d.deleteRequested.connect(self._delete_container)
+        self.room_3d.exitRequested.connect(lambda: self.view.set_focused_room(None))
+
+        self._canvas_stack = QStackedWidget()
+        self._canvas_stack.addWidget(self.view)
+        self._canvas_stack.addWidget(self.room_3d)
+        body.addWidget(self._canvas_stack, 1)
 
         self.inspector = Inspector()
         self.inspector.dataChanged.connect(self._on_inspector_changed)
@@ -243,7 +261,10 @@ class LayoutSection(QWidget):
         self.inspector.resizeContainerRequested.connect(
             self._resize_container)
         self.inspector.tierCountChanged.connect(self._set_tier_count)
+        self.inspector.heightChanged.connect(self._set_height)
         self.view.containerResized.connect(
+            self.inspector.container_resized)
+        self.room_3d.containerResized.connect(
             self.inspector.container_resized)
         self.inspector.editModeChanged.connect(self.view.set_room_edit_mode)
         self.inspector.deletedRoom.connect(self._delete_room)
@@ -309,11 +330,36 @@ class LayoutSection(QWidget):
 
         layout.addStretch()
 
-        layout.addWidget(button("Fit", "ghost", lambda: self.view.fit_to_rooms(),
-                                "Zoom so the whole floor is visible"))
-        layout.addWidget(button("100%", "ghost", lambda: self.view.reset_zoom()))
+        # A switch rather than a pressed-in button. This is a setting that is
+        # either on or off, and its effect shows up somewhere else entirely
+        # (inside a room), so it has to say which way it is set without you
+        # having to go and check.
+        self._view_3d_button = ToggleSwitch("3D room")
+        self._view_3d_button.setChecked(True)
+        self._view_3d_button.setToolTip(
+            "Show a room in 3D when you step inside it. "
+            "Double-click a room to step in.")
+        self._view_3d_button.clicked.connect(self._toggle_3d)
+        layout.addWidget(self._view_3d_button)
+
+        layout.addWidget(button("Fit", "ghost", self._fit,
+                                "Zoom so everything is visible"))
+        layout.addWidget(button("100%", "ghost", self._reset_zoom))
 
         return bar
+
+    def _fit(self):
+        """Fit whichever view is showing. One button, two views."""
+        if self.showing_3d():
+            self.room_3d.fit()
+        else:
+            self.view.fit_to_rooms()
+
+    def _reset_zoom(self):
+        if self.showing_3d():
+            self.room_3d.reset_zoom()
+        else:
+            self.view.reset_zoom()
 
     def _tool_button(self, text, mode):
         tool = button(text, "ghost")
@@ -377,11 +423,22 @@ class LayoutSection(QWidget):
         }
         self._hint.setText(hints[mode])
 
+        # The 3D view has its own Add container drag, so the same toolbar
+        # button arms whichever canvas is showing.
+        self.room_3d.set_adding(self.showing_3d() and mode == MODE_ADD_BOX)
+
     # -- loading -------------------------------------------------------------
 
     def set_profile(self, profile):
         self.profile = profile
         self.inspector.set_profile(profile)
+
+        # The toggle is a per-profile setting, so the button has to show what
+        # THIS profile says rather than whatever the last one did.
+        self._view_3d_button.blockSignals(True)
+        self._view_3d_button.setChecked(profile.view_3d)
+        self._view_3d_button.blockSignals(False)
+        self._say_where_3d_is()
 
         if not profile.floors:
             # A profile with no floors is useless, so give it one rather than
@@ -407,10 +464,24 @@ class LayoutSection(QWidget):
         self.view.set_floor(self.profile, floor)
         self.view.fit_to_rooms()
         self.strip.set_profile(self.profile, index)
+        # set_floor drops the focused room, so the 3D view has nothing left to
+        # show and the flat canvas comes back.
+        self._update_canvas()
+
+    def refresh_views(self):
+        """Repaint both canvases, not just the one on screen.
+
+        The toggle can swap them at any moment, and a canvas that was correct
+        when it was hidden is not correct when it comes back. Keeping both in
+        step costs a repaint of a hidden widget and removes a whole class of
+        "it only goes wrong after you toggle" bugs.
+        """
+        self.view.refresh()
+        self.room_3d.refresh()
 
     def refresh(self):
         """Repaint everything from the current data."""
-        self.view.refresh()
+        self.refresh_views()
         self.strip.rebuild()
         if self.profile and 0 <= self.current_index < len(self.profile.floors):
             self._floor_label.setText(
@@ -422,13 +493,20 @@ class LayoutSection(QWidget):
         self.inspector.show_selection(selection)
 
     def _on_data_changed(self):
+        # BOTH canvases, not just the 3D one. This used to refresh only the 3D
+        # view, on the reasoning that the flat canvas is the thing that
+        # usually raised the change and so already knows. It is not: a drag in
+        # the 3D view writes straight to the model, and the flat canvas sat
+        # there showing the container where it used to be until something
+        # rebuilt the room.
         self.strip.rebuild()
+        self.refresh_views()
         self.dataChanged.emit()
 
     def _on_inspector_changed(self):
         # An edit in the panel changes labels and colors on the canvas, so
         # the canvas has to repaint even though nothing moved.
-        self.view.refresh()
+        self.refresh_views()
         self.strip.rebuild()
         self.dataChanged.emit()
 
@@ -439,9 +517,81 @@ class LayoutSection(QWidget):
 
         if room is None:
             self._hint.setText("")
+            self._say_where_3d_is()
+        elif self.profile is not None and self.profile.view_3d:
+            self._hint.setText(
+                f"Inside {short(room.name)} in 3D · Esc to step out")
         else:
             self._hint.setText(
                 f"Working inside {short(room.name)} · Esc to step out")
+
+        self._update_canvas()
+
+    # -- the two canvases ------------------------------------------------------
+
+    def showing_3d(self):
+        """Is the 3D room view the one on screen right now?"""
+        return self._canvas_stack.currentWidget() is self.room_3d
+
+    def _want_3d(self):
+        """Should it be? Only inside a room, and only if the profile says so."""
+        if self.profile is None or not self.profile.view_3d:
+            return False
+        return self.view.focused_room_item is not None
+
+    def _update_canvas(self):
+        """Put the right view in the slot, and keep it pointed at the room.
+
+        Called on every focus change and every toggle, so there is one place
+        that decides which canvas is showing rather than three places that
+        have to agree.
+        """
+        room = (self.view.focused_room_item.room
+                if self.view.focused_room_item is not None else None)
+
+        if self._want_3d():
+            self.room_3d.set_room(self.profile, room)
+            self._canvas_stack.setCurrentWidget(self.room_3d)
+            self.room_3d.setFocus()
+            # Stepping into 3D with a drawing tool armed would leave a tool
+            # selected that this view has no use for.
+            if self.view.mode not in (MODE_SELECT, MODE_ADD_BOX):
+                self.view.set_mode(MODE_SELECT)
+            self.room_3d.set_adding(self.view.mode == MODE_ADD_BOX)
+        else:
+            self.room_3d.set_room(None, None)
+            self._canvas_stack.setCurrentWidget(self.view)
+
+    def _toggle_3d(self, checked):
+        """The toolbar switch. Saved with the profile, so it is remembered."""
+        if self.profile is not None:
+            self.profile.view_3d = bool(checked)
+            self.dataChanged.emit()
+        self._update_canvas()
+        self._say_where_3d_is()
+
+    def _say_where_3d_is(self):
+        """Explain the switch when pressing it appears to do nothing.
+
+        3D only replaces the canvas once you are inside a room, so out on the
+        floor overview the switch is a setting for later and pressing it
+        changes nothing you can see. Saying so is the difference between a
+        setting and a broken button.
+        """
+        if self.view.focused_room_item is not None:
+            return
+
+        if self.profile is not None and self.profile.view_3d:
+            self._hint.setText(
+                "3D is on · double-click a room to step inside and see it")
+        else:
+            self._hint.setText("3D is off · rooms stay flat")
+
+    def _set_height(self, container, height):
+        """The inspector's height dropdown."""
+        container.height = float(height)
+        self.refresh_views()
+        self.dataChanged.emit()
 
     def _rename_subject(self, subject):
         """Rename a room or a container from the canvas right-click menu.
@@ -459,7 +609,7 @@ class LayoutSection(QWidget):
 
         subject.name = name
         subject.color = color
-        self.view.refresh()
+        self.refresh_views()
         self.inspector.show_selection(self.inspector.selection)
         self.dataChanged.emit()
 
@@ -475,11 +625,19 @@ class LayoutSection(QWidget):
     def duplicate_selection(self):
         """Ctrl+D. Copies whichever room or container is selected.
 
-        A passthrough, because the canvas is the only thing that knows what is
-        selected, and the shortcut is registered up in the workspace. Floors
-        are deliberately not included: they are duplicated from their own
-        right-click menu, where you can see which one you are pointing at.
+        Which canvas is showing decides what "selected" means, because the two
+        keep their selections separately. Floors are deliberately not
+        included: they are duplicated from their own right-click menu, where
+        you can see which one you are pointing at.
         """
+        if self.showing_3d():
+            if self.room_3d.selected is not None:
+                made = self.view.duplicate_container(self.room_3d.selected)
+                self.refresh_views()
+                if made is not None:
+                    self.room_3d.select(made)
+            return
+
         self.view.duplicate_selection()
 
     def reveal_container(self, container_id):
@@ -501,7 +659,17 @@ class LayoutSection(QWidget):
         if index != self.current_index:
             self.show_floor(index)
 
-        return self.view.reveal_container(container_id)
+        found = self.view.reveal_container(container_id)
+
+        # reveal_container steps out to the whole floor, which is the right
+        # answer flat: it shows you WHERE on the plan the thing is. In 3D the
+        # useful answer is the opposite, so go back into the room that holds
+        # it and pick it out there.
+        if found and self.profile.view_3d and room is not None:
+            self._focus_room(room)
+            self.room_3d.select(container)
+
+        return found
 
     def _resize_container(self, container, width, height):
         """The inspector's W/H boxes for a container.
@@ -514,13 +682,14 @@ class LayoutSection(QWidget):
                 if container_item.container.id == container.id:
                     container_item.resize_to(container.x, container.y,
                                              width, height)
+                    self.room_3d.refresh()
                     self.dataChanged.emit()
                     return
 
     def _set_tier_count(self, container, count):
         """Add or remove a tier, then rebuild the panel to show it."""
         self.profile.set_tier_count(container, count)
-        self.view.refresh()
+        self.refresh_views()
         self.inspector.show_selection(container)
         self.dataChanged.emit()
 
@@ -651,5 +820,8 @@ class LayoutSection(QWidget):
         self.profile.delete_container(container.id)
         if room is not None:
             self.view.rebuild_room(room)
+        # refresh_views drops the 3D view's hold on the container that has
+        # just gone, so its handles do not go on being drawn around nothing.
+        self.refresh_views()
         self.inspector.show_selection(None)
         self.dataChanged.emit()

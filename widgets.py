@@ -24,12 +24,16 @@ single most important Qt idea to get comfortable with.
 
 import re
 
-from PySide6.QtCore import Qt, Signal, QSize, QRect, QPoint
+from PySide6.QtCore import (
+    Property, QEasingCurve, QPoint, QPropertyAnimation, QRect,
+    QRectF, QSize, Qt, Signal,
+)
+from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QDialog, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLineEdit, QMessageBox, QLayout, QCheckBox,
     QScrollArea, QFrame, QSpinBox, QPlainTextEdit, QComboBox, QSizePolicy,
-    QListWidget, QAbstractItemView,
+    QListWidget, QAbstractItemView, QAbstractButton,
 )
 
 import theme
@@ -1640,3 +1644,116 @@ class BulkAddDialog(QDialog):
             ))
 
         return created
+
+
+# ---------------------------------------------------------------------------
+# TOGGLE SWITCH
+# ---------------------------------------------------------------------------
+
+class ToggleSwitch(QAbstractButton):
+    """An on/off switch: a pill with a knob that slides across.
+
+    A checkable QPushButton works, but it tells you its state only by looking
+    very slightly darker, and "slightly darker" is not a state you can read
+    across a room or notice out of the corner of your eye. A switch says which
+    way it is set from its shape, before you have read the label.
+
+    The knob's position is a real Qt property so it can be animated. That is
+    not decoration: the movement is what tells you the click registered, which
+    matters most for a setting whose effect is somewhere else on screen.
+    """
+
+    KNOB_MARGIN = 3
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setText(text)
+
+        self._track = QSize(40, 22)
+        self._slide = 0.0        # 0 is off, 1 is fully across
+
+        self._motion = QPropertyAnimation(self, b"slide", self)
+        self._motion.setDuration(130)
+        self._motion.setEasingCurve(QEasingCurve.OutCubic)
+
+        self.toggled.connect(self._on_toggled)
+
+    # -- the animated property ------------------------------------------------
+
+    def get_slide(self):
+        return self._slide
+
+    def set_slide(self, value):
+        self._slide = value
+        self.update()
+
+    slide = Property(float, get_slide, set_slide)
+
+    def _on_toggled(self, checked):
+        self._motion.stop()
+        self._motion.setStartValue(self._slide)
+        self._motion.setEndValue(1.0 if checked else 0.0)
+        self._motion.start()
+
+    def setChecked(self, checked):
+        """Jump straight to the end when set in code rather than clicked.
+
+        Setting a profile's saved state should not look like someone flicked
+        the switch, and an animation left half-run by a rebuild would.
+        """
+        super().setChecked(checked)
+        self._motion.stop()
+        self.set_slide(1.0 if checked else 0.0)
+
+    # -- size ------------------------------------------------------------------
+
+    def sizeHint(self):
+        metrics = QFontMetricsF(self.font())
+        width = self._track.width() + theme.SPACE_SM
+        if self.text():
+            width += metrics.horizontalAdvance(self.text()) + 2
+        return QSize(int(width), max(self._track.height(), 24))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    # -- painting --------------------------------------------------------------
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        track = QRectF(0, (self.height() - self._track.height()) / 2,
+                       self._track.width(), self._track.height())
+        radius = track.height() / 2
+
+        # The track carries the color, so on and off differ in hue as well as
+        # in knob position. Two signals for one state beats one.
+        painter.setBrush(QColor(theme.mix(
+            theme.BG_ACTIVE, theme.SUCCESS, self._slide)))
+        painter.setPen(QPen(theme.qcolor(
+            theme.SUCCESS if self._slide > 0.5 else theme.BORDER_LIGHT,
+            0.9), 1.2))
+        painter.drawRoundedRect(track, radius, radius)
+
+        travel = track.width() - track.height()
+        knob_size = track.height() - self.KNOB_MARGIN * 2
+        knob = QRectF(track.x() + self.KNOB_MARGIN + travel * self._slide,
+                      track.y() + self.KNOB_MARGIN, knob_size, knob_size)
+        painter.setBrush(QColor(theme.TEXT if self._slide > 0.5
+                                else theme.TEXT_MUTED))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(knob)
+
+        if self.text():
+            painter.setPen(QPen(QColor(
+                theme.TEXT if self.isChecked() else theme.TEXT_MUTED)))
+            painter.drawText(
+                QRectF(track.right() + theme.SPACE_SM, 0,
+                       self.width() - track.right() - theme.SPACE_SM,
+                       self.height()),
+                Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+        painter.end()

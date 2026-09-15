@@ -57,7 +57,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from models import short
+from models import MIN_CONTAINER_SIZE, fit_in_room, short
 
 # Flipped on by export.py while rendering a PDF. The room and container
 # labels are near-white so they read on the dark canvas; on paper that is
@@ -69,7 +69,10 @@ HANDLE_RADIUS = 5
 SCALE_HANDLE_SIZE = 9
 LABEL_MARGIN = 26        # extra room in boundingRect for text drawn above a shape
 MIN_ROOM_SIZE = 40       # a room can't be squashed smaller than this
-MIN_CONTAINER_SIZE = 20  # and a container can't go below one grid square
+
+# MIN_CONTAINER_SIZE is imported from models.py, where the clamp that uses it
+# lives. It is re-exported here because this is where callers expect to find
+# it, and having two numbers that must agree is how they stop agreeing.
 
 # The two edit modes described in the module docstring.
 # What dragging a room MEANS right now. Exactly one of these is in force
@@ -122,11 +125,10 @@ def canvas_font(size, bold=False):
     return font
 
 
-def qcolor(hex_color, alpha=1.0):
-    """A QColor from one of our hex strings, optionally see-through."""
-    color = QColor(hex_color)
-    color.setAlphaF(alpha)
-    return color
+# qcolor lives in theme.py now, next to the colors it is built from, but it
+# is re-exported here because every drawing file in the project already
+# reaches for floor_items.qcolor.
+qcolor = theme.qcolor
 
 
 # ---------------------------------------------------------------------------
@@ -346,18 +348,14 @@ class ContainerItem(QGraphicsRectItem):
     def resize_to(self, x, y, width, height):
         """Move and resize in room coordinates, clamped inside the room.
 
-        Also used by the inspector's W and H boxes, so both routes clamp the
-        same way and cannot disagree about what fits.
+        Used by the resize handles, the inspector's W and H boxes, and the
+        Add container tool, so every route clamps through the one function in
+        models.py and none of them can disagree about what fits.
         """
-        room_left, room_top, room_w, room_h = self.room_item.room.bounds()
-
-        width = max(width, MIN_CONTAINER_SIZE)
-        height = max(height, MIN_CONTAINER_SIZE)
-        width = min(width, room_w)
-        height = min(height, room_h)
-
-        x = min(max(x, room_left), room_left + room_w - width)
-        y = min(max(y, room_top), room_top + room_h - height)
+        x, y, width, height = fit_in_room(
+            self.room_item.room, x, y, width, height,
+            stay=(self.container.x, self.container.y,
+                  self.container.w, self.container.h))
 
         self.container.x = x
         self.container.y = y
@@ -380,6 +378,30 @@ class ContainerItem(QGraphicsRectItem):
         model, so this just asks for a save."""
         self.room_item.editor.notify_changed()
 
+    def sync_from_model(self):
+        """Put this box back where its container says it is.
+
+        The 3D view writes straight to the model, so this is how the flat
+        canvas finds out. Position changes are applied with geometry
+        notifications turned off: itemChange snaps to the grid and clamps,
+        which is exactly right while someone is dragging and exactly wrong
+        here, where the model is already the answer and re-snapping it would
+        leave the two views a few units apart.
+        """
+        if (self.rect().width(), self.rect().height()) != (self.container.w,
+                                                           self.container.h):
+            self.prepareGeometryChange()
+            self.setRect(0, 0, self.container.w, self.container.h)
+            self._position_handles()
+
+        if (self.pos().x(), self.pos().y()) != (self.container.x,
+                                                self.container.y):
+            self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, False)
+            self.setPos(self.container.x, self.container.y)
+            self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+
+        self.update()
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemSelectedChange:
             # Qt has not applied the new value yet, so use what it is about
@@ -389,17 +411,21 @@ class ContainerItem(QGraphicsRectItem):
                 handle.setVisible(showing)
 
         if change == QGraphicsItem.ItemPositionChange and self.scene():
+            # Snap to the grid first, then let the shared clamp decide where
+            # that lands. Dragging is the fourth caller of fit_in_room and
+            # gets the same answer as the other three.
             point = snap_point(value)
-            # Keep the container inside its room's bounding box. Clamping to
-            # the box rather than the exact polygon is a deliberate
-            # simplification: it is predictable to use, and being able to nudge
-            # a drawer slightly into a corner notch is not worth the math.
-            left, top, width, height = self.room_item.room.bounds()
-            max_x = left + width - self.container.w
-            max_y = top + height - self.container.h
-            point.setX(min(max(point.x(), left), max(left, max_x)))
-            point.setY(min(max(point.y(), top), max(top, max_y)))
-            return point
+            # Where the item is right now, not where the model says it is.
+            # The model is only written on release, so mid-drag it still
+            # holds the position the drag started from -- and refusing back
+            # to THAT would yank the box across the room on the first step
+            # that does not fit. self.pos() is the last position that did.
+            x, y, _, _ = fit_in_room(
+                self.room_item.room, point.x(), point.y(),
+                self.container.w, self.container.h,
+                stay=(self.pos().x(), self.pos().y(),
+                      self.container.w, self.container.h))
+            return QPointF(x, y)
         return super().itemChange(change, value)
 
     def mouseReleaseEvent(self, event):
@@ -538,6 +564,21 @@ class RoomItem(QGraphicsPolygonItem):
 
     def _apply_polygon(self):
         self.setPolygon(QPolygonF([QPointF(x, y) for x, y in self.room.points]))
+
+    def sync_from_model(self):
+        """Put the drawn shapes back where the data says they are.
+
+        Cheaper than rebuild() and it keeps selection, because it moves the
+        existing items rather than throwing them away. The list of containers
+        is assumed unchanged -- anything structural still goes through
+        rebuild().
+        """
+        if (self.pos().x(), self.pos().y()) != (self.room.x, self.room.y):
+            self.setPos(self.room.x, self.room.y)
+        self.update()
+
+        for container_item in self.container_items:
+            container_item.sync_from_model()
 
     def _rebuild_handles(self):
         for old in self.handles + self.scale_handles:

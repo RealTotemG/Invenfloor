@@ -86,6 +86,8 @@ place. A container is a thing you open.
 | `layout_section.py` | Floors, toolbar, and the wiring between canvas and inspector |
 | `floor_view.py` | The canvas: grid, zoom, pan, drawing tools |
 | `floor_items.py` | How a room and a container draw and drag themselves, and how a floor is rendered anywhere else |
+| `iso.py` | The isometric projection and the shapes drawn through it |
+| `room_view_3d.py` | The 3D room view: painting, picking, dragging, resizing |
 | `inspector.py` | The edit panel down the right |
 | `items_section.py` | The item catalog, the saved views, the tag manager |
 | `export.py` | Writing CSV and PDF. Doesn't touch any screens. |
@@ -277,6 +279,130 @@ On a corner, remove that corner.
 room itself locks so you can't shove it by mistake, and its containers become
 draggable. Escape or another double-click steps back out.
 
+**The 3D room view.** Step inside a room and it's drawn from the corner, like
+an isometric game, filling the whole canvas. Click a container and the
+inspector fills in exactly as it does on the flat plan: name, color, size,
+height, tiers, tags, what's in it. Drag one across the floor, drag its corner
+handles to change its footprint, drag the round handle floating above it to
+change how tall it stands. Add container works the same way, dragging out a
+footprint. The toggle is up in the toolbar, it's on by default, and it's
+remembered per profile, so a warehouse of identical racking can stay flat
+while a house doesn't.
+
+The height handle floats on an arm above the box on purpose. It used to sit on
+the top face, which is exactly where you reach to pick a box up, so every
+attempt to move a cabinet made it taller instead. How far it floats is
+`iso.handle_lift`, worked out from the footprint rather than fixed, because a
+lift that looks generous on a small bin lands back inside the top face of a
+wide workbench.
+
+Turn it off and the program is exactly what it was. The 3D view is a second
+widget that takes the canvas's place in a stack; with the toggle off it is
+never shown and never asked anything.
+
+**Getting back out.** There's a "Back to floor plan" button in the top left
+corner of the canvas whenever you're inside a room, in 3D and on the flat plan
+both. Escape does the same thing, and so does double-clicking the floor, but
+neither of those is something you can see, and being stuck inside a room with
+no visible door is a bad first five minutes. Both canvases read the corner
+offset from `theme.CANVAS_EXIT_MARGIN`, so the button doesn't shift when the
+toggle swaps one for the other.
+
+None of it is really 3D. There's no engine and no extra dependency, just a
+projection in `iso.py`:
+
+```
+screen_x = (x - y) * cos(30)
+screen_y = (x + y) * sin(30) - height
+```
+
+Two lines, and the whole illusion comes out of them. A box is three polygons,
+because from a fixed camera you can never see the other three faces. Draw
+order is `x + y`, far to near, which is always right here because a drawer
+can't wrap around another drawer.
+
+Which three is worth working out rather than guessing, and I guessed wrong the
+first time. A point is nearer the camera the bigger its `x + y`, so the
+nearest vertical edge of a box is at `(x+w, y+d)`, and the two sides you can
+see are the two that touch it: the `y+d` wall, which lands on the LEFT of the
+screen, and the `x+w` wall, which lands on the RIGHT. Draw the wrong pair and
+the box has a hole in one side. `solid_test.py` renders a box and counts
+background pixels inside its own silhouette, because that hole is obvious in
+use and easy to miss reading the code.
+
+The same math run backwards is what makes dragging work. Two equations, two
+unknowns, so it solves exactly, and a point on screen becomes the point on the
+floor under it. That assumes height zero, which is true of anything standing
+on the floor, and containers always are.
+
+**Container heights.** Four presets in the inspector: Low, Medium, Tall, Full
+height. Medium is the default, and every container in a save file written
+before this existed becomes Medium, so an old profile looks like a room the
+first time you open it in 3D rather than a car park. The 3D handle can put a
+container anywhere between the presets, and the dropdown then shows the
+nearest one so it's never blank.
+
+The numbers behind those names are deliberately modest: Medium is about the
+height of the drawn wall, and Full height is roughly twice it. The first set
+was picked against an empty room, where anything looks reasonable, and they
+were absurd the moment there was a wall to compare them to.
+
+**Save file versions.** Most format changes need no special handling, because
+`from_dict` reads every field with `.get(key, default)` and an old file just
+takes the default. That covers ADDING things.
+
+It does not cover changing what a number MEANS. Halving the height presets
+turned a stored 60 from "medium" into "tall", and no default can tell those
+apart. So a profile carries a `schema` number, and `migrate()` in `models.py`
+brings older files up to date on load.
+
+Two details there are load bearing. It works on the raw dictionary rather than
+on loaded objects, because once a `Container` exists a missing height has
+already been filled in with today's default and there's no way left to tell
+"the user chose 30" from "this file predates heights". And it halves before
+clamping, because the limits moved with the scale: clamping an old, legal 150
+first would squash it to today's maximum and halve that instead.
+
+Note that a container's `h` is its DEPTH on the floor plan, and `height` is
+how tall it stands. They were never going to get the same name; `h` predates
+the 3D view and renaming it would break every save file.
+
+**Containers stay in their room.** Whatever you do to one, it ends up inside
+the walls: drag a new one out through a wall and it stops at the wall, type an
+absurd size into the inspector and it gets cut down, drag one across the floor
+and it stops at the edge. Every route goes through `fit_in_room` in
+`models.py`. One clamp with six callers, rather than six clamps that drift
+apart, which is exactly how the bug below happened.
+
+Inside the room means inside its OUTLINE, not inside the rectangle you could
+draw around it. That distinction only matters for a room with a notch in it,
+which is to say an L-shape, and for a long time the clamp did not make it: the
+notch counted as floor, so a drawer could be parked in the missing corner. On
+a flat plan that looks like ordinary empty canvas and nobody notices. In the
+3D view the box stands over nothing at all, which is how it finally got
+reported.
+
+A bounding rectangle is easy to clamp to because you can take a minimum. An
+outline with a notch has no such answer, and the honest one is "then it does
+not go there". So `fit_in_room` takes a `stay` argument: where the container
+is right now. If the new position does not fit, it slides as far along one
+axis as does fit, and failing that it stays put. That is a wall, and a wall is
+something anyone can predict without reading this paragraph.
+
+Drawing a new container is the one case with nothing to stay at, so instead
+the dashed preview turns red the moment the footprint leaves the room, and
+letting go makes nothing. The tool stays armed so the next drag is another
+attempt rather than a trip back to the toolbar. Right-clicking to drop one in
+tries a smaller box instead of refusing, because you named the spot and a
+smaller container there beats none at all.
+
+A container already stranded outside is never trapped by any of this: if where
+it sits is not inside either, the move goes through, because the alternative
+is a box that can never be rescued. Loading a save file repairs those anyway,
+nudging each one to the nearest spot that fits (`nearest_fit`), which for a
+room made of straight walls is a handful of candidates to try and lands where
+a person would have put it.
+
 **Floors.** The stack is down the left, highest at the top, with arrows to step
 through. Press the up arrow on the top floor and it offers to create a new
 floor above rather than just doing nothing. Same going down, which is how you
@@ -388,6 +514,7 @@ out of step with the app.
 | `Ctrl+N` | new item |
 | `Ctrl+B` | add many |
 | `Ctrl+D` | duplicate the selected room or container |
+| `Esc` in 3D | cancel the tool, or step out of the room |
 | `Esc` | cancel a tool, step out of a room |
 | `Delete` | remove whatever's selected on the canvas |
 
@@ -525,6 +652,77 @@ and 876 on the other.
 `fit_inside` in `floor_items.py` works out the destination rectangle first and
 hands Qt one that already has the right shape, with `IgnoreAspectRatio`. The
 fitting then happens in eight lines you can read instead of inside a flag.
+
+**Five clamps and a gap.** A container could be dragged out through a wall
+and left there, and once it was out there you couldn't do anything with it
+except delete it. Two separate mistakes stacked on top of each other, and the
+second one is the interesting half.
+
+The first: four of the five ways to set a container's geometry clamped it to
+the room, and the fifth, the Add container drag, didn't clamp at all. Nobody
+writes five clamps on purpose. They accumulate, each one added next to the
+code that needed it, and the fifth path gets written later by someone who
+assumes the clamping already happened somewhere. There is one now, in
+`models.py`, and every path calls it.
+
+The second: clicking the stranded container did nothing, and it took
+reproducing it to see why. Clicking bare canvas steps you out of the room
+you're working inside. The test for "bare canvas" was "no room polygon
+contains this point" - and a container sitting outside its room is, by that
+test, bare canvas. So the click dropped the room focus, dropping focus makes
+every container in the room stop accepting the mouse, and the thing you were
+reaching for stopped accepting the mouse before it could be picked up.
+Clicking it was what made it unclickable.
+
+Both are fixed, but only the second one makes it impossible to get stuck
+again. The clamp stops containers ending up outside; the focus fix means that
+if one ever does, by a route nobody thought of, you can still grab it and drag
+it back. A save file that already has one repairs itself on load.
+
+**Two views of the same data means two things to keep in step.** Adding the
+3D room view meant every place that said "repaint the canvas" was now only
+half right, and the half it missed was the one not on screen. Deleting a
+container refreshed the flat canvas, so the 3D view went on drawing resize
+handles around a box that no longer existed. Adding a tier or typing a new
+size updated the data and repainted nothing you could see.
+
+There is one `refresh_views()` now and both canvases go through it, including
+the hidden one. Repainting a widget nobody is looking at costs nothing and
+removes a whole class of "it only goes wrong after you toggle" bugs.
+
+The other half of that fix is that the 3D view drops a selection that is no
+longer in the room, in `refresh()` rather than at each place a container can
+be deleted. Put the check where it cannot be forgotten, not at every call
+site that has to remember it.
+
+**A repaint is not a refresh, in a QGraphicsScene.** That same pair of views
+produced a second, subtler version of the same bug. `FloorView.refresh()`
+called `update()` on every shape, which is exactly right when only the text
+changed. But the 3D view edits the model directly, and a QGraphicsItem holds
+its own position: told to repaint, it dutifully repaints itself where it
+already was. Move a cabinet in 3D, step back out to the floor plan, and it was
+still in its old spot until something happened to rebuild the room. The data
+was right the whole time, which is what made it look so strange.
+
+Refresh now means reading the positions back out of the model
+(`sync_from_model`), not just repainting. Two details there are load bearing.
+It moves the existing items rather than rebuilding them, so selection
+survives. And it turns geometry notifications off while it does, because
+`itemChange` snaps to the grid and clamps to the room, which is right while
+someone is dragging and wrong here, where the model is already the answer.
+
+The wiring mattered too. `_on_data_changed` refreshed only the 3D view, on the
+reasoning that the flat canvas is usually what raised the change and so
+already knows. Usually is not always, and "usually" is where these live.
+
+**QColor cannot read the string with_alpha gives you.** `with_alpha` returns
+`"rgba(79, 124, 255, 0.16)"`, which is what a Qt STYLESHEET wants. Hand that
+to `QColor` and it does not complain, it does not raise, it just gives you
+opaque black. A faded highlight turns into a solid slab and you go hunting
+through your drawing code for a bug that is one constructor away.
+
+Use `theme.qcolor(hex, alpha)` for a QColor and `with_alpha` only in
+stylesheets. They now live next to each other so the difference is visible.
 
 **Anything expensive in a paintEvent will be felt.** `paintEvent` is not a
 "when the data changes" hook. It runs when the window is resized, uncovered,

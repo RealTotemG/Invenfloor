@@ -401,12 +401,50 @@ class Item:
 # CONTAINER
 # ---------------------------------------------------------------------------
 
+# How tall a container stands, for the 3D room view. The flat floor plan
+# ignores it entirely, so a profile that never turns 3D on never notices it.
+#
+# Four presets rather than a free number, because "waist high" is a thing
+# people know about their own furniture and "72" is not. The 3D view's resize
+# handles can still set any value in between; these are just the quick
+# answers, and the names are what the inspector shows.
+# Halved from the first attempt. The original numbers were set against an
+# empty room and looked reasonable there; standing next to a wall they were
+# absurd, with "Full height" four times the height of the wall behind it.
+# Nothing here is a real-world measurement, so the only thing these have to
+# be right about is how they look against the room.
+CONTAINER_HEIGHTS = [
+    ("Low", 15.0),          # a crate, a low drawer unit
+    ("Medium", 30.0),       # a chest of drawers, a workbench
+    ("Tall", 50.0),         # a cabinet, a bookcase
+    ("Full height", 75.0),  # a wardrobe, floor to ceiling shelving
+]
+
+DEFAULT_HEIGHT = 30.0       # Medium, and what every older save file becomes
+MIN_HEIGHT = 6.0
+MAX_HEIGHT = 120.0
+
+
+def height_name(height):
+    """The closest preset name for a height, for showing in the inspector.
+
+    Closest rather than exact, because the 3D resize handles can leave a
+    container at 83, and "Tall" is a more useful thing to read than nothing.
+    """
+    closest = min(CONTAINER_HEIGHTS, key=lambda pair: abs(pair[1] - height))
+    return closest[0]
+
+
 @dataclass
 class Container:
     """A drawer, cabinet, shelf or bin sitting inside a room.
 
     x/y are measured from the room's origin, so the container moves with its
-    room automatically. w/h are its size in the same units.
+    room automatically. w/h are its footprint on the floor in the same units.
+
+    Note that `h` is depth on the floor plan, NOT height. The name predates
+    the 3D view and renaming it would break every save file, so the standing
+    up direction is `height` and the two are kept well apart.
     """
     id: str = field(default_factory=new_id)
     name: str = "New container"
@@ -415,6 +453,7 @@ class Container:
     y: float = 0.0
     w: float = 80.0
     h: float = 60.0
+    height: float = DEFAULT_HEIGHT
     tag_ids: list = field(default_factory=list)
 
     # How many tiers this container is divided into. Zero means it is just a
@@ -434,6 +473,7 @@ class Container:
         return {
             "id": self.id, "name": self.name, "color": self.color,
             "x": self.x, "y": self.y, "w": self.w, "h": self.h,
+            "height": self.height,
             "tag_ids": list(self.tag_ids),
             "tier_count": self.tier_count,
         }
@@ -446,11 +486,85 @@ class Container:
             color=raw.get("color", "#f0a726"),
             x=raw.get("x", 0.0), y=raw.get("y", 0.0),
             w=raw.get("w", 80.0), h=raw.get("h", 60.0),
+            # Save files written before the 3D view have no height, and
+            # Medium is a fair guess for a drawer unit you have not told us
+            # about. It also means an old profile looks sensible the first
+            # time it is opened in 3D rather than uniformly flat.
+            height=clamp_height(raw.get("height", DEFAULT_HEIGHT)),
             tag_ids=list(raw.get("tag_ids", [])),
             # No key means a plain box, which is what every container was
             # before tiers existed.
             tier_count=max(int(raw.get("tier_count", 0)), 0),
         )
+
+
+def clamp_height(value):
+    """Keep a container's height sane, whatever set it."""
+    try:
+        height = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_HEIGHT
+    return min(max(height, MIN_HEIGHT), MAX_HEIGHT)
+
+
+# WHAT VERSION A SAVE FILE IS
+# ---------------------------
+# Almost every change to the format is handled by `raw.get(key, default)`:
+# a file missing a key gets a sensible one and nothing else has to know. That
+# covers adding things.
+#
+# It does not cover changing what an existing number MEANS. When the height
+# presets were halved, a stored 60 stopped meaning "medium" and started
+# meaning "tall", and no default can tell those two apart. So the file says
+# which version wrote it, and Profile.migrate below fixes up anything older.
+#
+#   1  the original format, and everything written before this counter existed
+#   2  container heights on the halved scale
+SCHEMA = 2
+
+
+def schema_of(raw):
+    """Which save format version a loaded profile claims to be."""
+    try:
+        return max(int(raw.get("schema", 1)), 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def migrate(raw):
+    """Bring an older save file up to the current format, in place.
+
+    This works on the raw dictionary rather than on loaded objects, and that
+    is the whole trick. By the time a Container exists, a missing height has
+    already been filled in with today's default, and there is no way left to
+    tell "the user chose 30" from "this file is older than heights". In the
+    dictionary the key is either there or it is not.
+    """
+    if schema_of(raw) < 2:
+        # Version 1 used a height scale twice this one. A height written then
+        # was picked against those numbers, so halve it rather than leave a
+        # room full of cabinets standing twice as tall as the preset they were
+        # chosen from. Containers with no height at all are untouched: they
+        # predate the setting entirely and should just take today's default.
+        for floor in raw.get("floors", []):
+            for room in floor.get("rooms", []):
+                for container in room.get("containers", []):
+                    if "height" not in container:
+                        continue
+                    stored = container["height"]
+                    try:
+                        # Halve BEFORE clamping. The limits moved with the
+                        # scale, so clamping first would squash an old and
+                        # perfectly legal 150 down to today's maximum and
+                        # then halve that instead.
+                        stored = float(stored) / 2
+                    except (TypeError, ValueError):
+                        pass  # clamp_height turns what it cannot read into
+                        # the default, which is the right answer here too.
+                    container["height"] = clamp_height(stored)
+
+    raw["schema"] = SCHEMA
+    return raw
 
 
 def closest_point_on_segment(ax, ay, bx, by, px, py):
@@ -473,6 +587,209 @@ def closest_point_on_segment(ax, ay, bx, by, px, py):
     cx = ax + along * dx
     cy = ay + along * dy
     return cx, cy, math.hypot(px - cx, py - cy)
+
+
+# ---------------------------------------------------------------------------
+# KEEPING CONTAINERS INSIDE THEIR ROOM
+# ---------------------------------------------------------------------------
+
+MIN_CONTAINER_SIZE = 20     # a container cannot go below one grid square
+
+# How close to a wall still counts as on it. A container pushed flush against
+# a wall has corners sitting exactly on the line, and floating point being
+# what it is, "exactly" needs a little room either side.
+ON_WALL = 0.001
+
+
+def walls_of(points):
+    """Every edge of a polygon as a pair of corners, including the closing one."""
+    return list(zip(points, points[1:] + points[:1]))
+
+
+def point_in_polygon(points, px, py):
+    """Is this point inside the outline? A point ON the outline counts as in.
+
+    The on-the-outline case is checked first and on purpose. A container
+    pushed flush into a corner has two corners sitting exactly on the walls,
+    and a test that called those "outside" would refuse the most natural
+    place in the room to put a cabinet.
+
+    The rest is the standard ray cast: fire a ray to the right and count the
+    walls it crosses. An odd count means inside, because every crossing takes
+    you from out to in or back again.
+    """
+    for (ax, ay), (bx, by) in walls_of(points):
+        _, _, away = closest_point_on_segment(ax, ay, bx, by, px, py)
+        if away <= ON_WALL:
+            return True
+
+    inside = False
+    for (ax, ay), (bx, by) in walls_of(points):
+        # Only walls that straddle the ray's height can be crossed by it. The
+        # comparison is deliberately lopsided -- one end counted, the other
+        # not -- so a ray passing exactly through a corner is counted once
+        # rather than twice or not at all.
+        if (ay > py) == (by > py):
+            continue
+        crossing_x = ax + (py - ay) * (bx - ax) / (by - ay)
+        if px < crossing_x:
+            inside = not inside
+    return inside
+
+
+def segments_cross(a, b, c, d):
+    """Do segments A-B and C-D properly cross each other?
+
+    Properly means each segment has one end on either side of the other's
+    line. Segments that merely touch at a point, or lie along each other, do
+    not count: a container pushed flush against a wall shares a line with it,
+    and that has to read as fitting rather than as poking through.
+    """
+    def side(ax, ay, bx, by, px, py):
+        return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+
+    return (side(*c, *d, *a) * side(*c, *d, *b) < 0
+            and side(*a, *b, *c) * side(*a, *b, *d) < 0)
+
+
+def room_contains_rect(room, x, y, width, height):
+    """Is this whole rectangle inside the room's outline?
+
+    This is what stops a container being parked in the notch of an L-shaped
+    room, where it sits inside the room's bounding rectangle but outside the
+    room itself. On a flat plan that only looks like empty canvas; in the 3D
+    view the box stands over nothing at all, which is how it got noticed.
+    """
+    points = room.points
+    if len(points) < 3:
+        return False
+
+    corners = [(x, y), (x + width, y),
+               (x + width, y + height), (x, y + height)]
+
+    if not all(point_in_polygon(points, px, py) for px, py in corners):
+        return False
+
+    # Four corners inside is not quite the whole story. A wall could slice
+    # straight across the rectangle with both its ends outside it, which the
+    # square notch of an L-shape can never do but a narrow spike can. Cheap
+    # to rule out, so rule it out.
+    for wall_a, wall_b in walls_of(points):
+        for edge_a, edge_b in walls_of(corners):
+            if segments_cross(edge_a, edge_b, wall_a, wall_b):
+                return False
+    return True
+
+
+def fit_in_room(room, x, y, width, height, stay=None):
+    """Move and shrink a container's rectangle until it sits inside the room.
+
+    Returns the corrected (x, y, width, height) in room coordinates. Every
+    route that sets a container's geometry comes through here -- dragging it,
+    dragging its handles, typing numbers in the inspector, drawing a new one,
+    dropping one from the right-click menu, and loading a save file. One
+    clamp with six callers, rather than six clamps that can disagree.
+
+    `stay` is where the container is RIGHT NOW, as (x, y, w, h), and it is
+    what makes the room's real shape enforceable. The bounding rectangle is
+    easy to clamp to because you can just take a minimum; an outline with a
+    notch in it has no such answer, and the honest one is "then it does not
+    go there". So: if what was asked for does not fit, slide as far along one
+    axis as does fit, and failing that stay put. That is a wall, and a wall
+    is something anyone can predict.
+
+    Callers with nothing to stay at -- a save file being repaired, a brand
+    new container -- pass nothing and get the old bounding-rectangle answer.
+    Refusing on their behalf would mean silently dropping the thing.
+    """
+    room_left, room_top, room_w, room_h = room.bounds()
+
+    width = min(max(width, MIN_CONTAINER_SIZE), room_w)
+    height = min(max(height, MIN_CONTAINER_SIZE), room_h)
+
+    # max(room_left, ...) guards a room narrower than the smallest container,
+    # where the right-hand limit would otherwise land left of the left one.
+    x = min(max(x, room_left), max(room_left, room_left + room_w - width))
+    y = min(max(y, room_top), max(room_top, room_top + room_h - height))
+
+    if stay is None or room_contains_rect(room, x, y, width, height):
+        return (x, y, width, height)
+
+    # Already outside before this move: a container stranded by an older
+    # version, or by a room reshaped around it. Refusing here would trap it
+    # there forever, so let it go wherever it was asked to go. Moving it can
+    # only improve matters, and the first move that lands inside sticks.
+    if not room_contains_rect(room, *stay):
+        return (x, y, width, height)
+
+    old_x, old_y = stay[0], stay[1]
+    for slid_x, slid_y in ((x, old_y), (old_x, y)):
+        if room_contains_rect(room, slid_x, slid_y, width, height):
+            return (slid_x, slid_y, width, height)
+
+    return stay
+
+
+def nearest_fit(room, x, y, width, height):
+    """The closest spot to (x, y) where a container this size actually fits.
+
+    Only used to repair a save file, where there is no "where it was a moment
+    ago" to fall back on and something has to be decided.
+
+    The candidates are built from the room's own corner coordinates, each one
+    tried as a left edge and as a right edge. That is the whole trick: in a
+    room made of straight walls, every position flush against something lines
+    up with one of those numbers, so an L-shape offers a handful to try and
+    the nearest one that fits is the spot a person would have picked anyway.
+    """
+    xs = ({corner[0] for corner in room.points}
+          | {corner[0] - width for corner in room.points} | {x})
+    ys = ({corner[1] for corner in room.points}
+          | {corner[1] - height for corner in room.points} | {y})
+
+    best = None
+    for try_x in sorted(xs):
+        for try_y in sorted(ys):
+            spot = fit_in_room(room, try_x, try_y, width, height)
+            if not room_contains_rect(room, *spot):
+                continue
+            away = (spot[0] - x) ** 2 + (spot[1] - y) ** 2
+            if best is None or away < best[0]:
+                best = (away, spot)
+
+    if best is None:
+        # Nothing fits anywhere: the room is smaller than the container, or
+        # has no real shape. The bounding clamp is still the best on offer.
+        return fit_in_room(room, x, y, width, height)
+    return best[1]
+
+
+def fit_container(room, container):
+    """Pull one container back inside its room, in place.
+
+    Returns True if it had to move. Used when loading a save file: an older
+    version of the app could leave a container stranded outside its room,
+    where it could not be clicked, so those repair themselves on the way in
+    rather than waiting to be found.
+
+    Stranded means outside the OUTLINE, not just outside the bounding
+    rectangle. A container parked in the notch of an L-shape is inside the
+    bounding rectangle and still standing over nothing, which is exactly what
+    it looks like in the 3D view.
+    """
+    x, y, width, height = fit_in_room(
+        room, container.x, container.y, container.w, container.h)
+
+    if not room_contains_rect(room, x, y, width, height):
+        x, y, width, height = nearest_fit(room, x, y, width, height)
+
+    if (x, y, width, height) == (container.x, container.y,
+                                 container.w, container.h):
+        return False
+
+    container.x, container.y = x, y
+    container.w, container.h = width, height
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +835,7 @@ class Room:
 
     @staticmethod
     def from_dict(raw):
-        return Room(
+        room = Room(
             id=raw.get("id", new_id()),
             name=raw.get("name", "Untitled"),
             color=raw.get("color", "#4f7cff"),
@@ -530,6 +847,16 @@ class Room:
             locked=bool(raw.get("locked", False)),
             containers=[Container.from_dict(c) for c in raw.get("containers", [])],
         )
+
+        # Repair on the way in. An older version could leave a container
+        # stranded outside its room, and once out there it could not be
+        # clicked, so it could not be dragged back. Fixing it here means the
+        # ones already sitting in save files sort themselves out.
+        if room.points:
+            for container in room.containers:
+                fit_container(room, container)
+
+        return room
 
     def center(self):
         """The middle of the polygon, in room-local coordinates."""
@@ -746,9 +1073,20 @@ class Profile:
     tags: list = field(default_factory=list)
     items: list = field(default_factory=list)
 
+    # Show rooms in 3D when you step inside one. A setting rather than data,
+    # but it is kept with the profile so it survives closing the app and so
+    # two profiles can disagree: a warehouse of identical racking is easier
+    # flat, a house is easier in 3D.
+    view_3d: bool = True
+
+    # Which version of the save format this profile was last written in. See
+    # SCHEMA and migrate() below.
+    schema: int = SCHEMA
+
     def to_dict(self):
         return {
             "id": self.id, "name": self.name, "color": self.color,
+            "view_3d": self.view_3d, "schema": SCHEMA,
             "floors": [f.to_dict() for f in self.floors],
             "tags": [t.to_dict() for t in self.tags],
             "items": [i.to_dict() for i in self.items],
@@ -756,10 +1094,15 @@ class Profile:
 
     @staticmethod
     def from_dict(raw):
+        raw = migrate(raw)
         return Profile(
             id=raw.get("id", new_id()),
             name=raw.get("name", "Untitled"),
             color=raw.get("color", "#4f7cff"),
+            # On for a save file that predates the setting, because it is on
+            # by default and an existing profile should get the new view too.
+            view_3d=bool(raw.get("view_3d", True)),
+            schema=schema_of(raw),
             floors=[Floor.from_dict(f) for f in raw.get("floors", [])],
             tags=[Tag.from_dict(t) for t in raw.get("tags", [])],
             items=[Item.from_dict(i) for i in raw.get("items", [])],

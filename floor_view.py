@@ -42,6 +42,7 @@ from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsPathItem, QGraphicsScene, QGraphicsView, QGraphicsRectItem, QMenu,
+    QPushButton,
 )
 
 import theme
@@ -49,7 +50,10 @@ from floor_items import (
     EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES, ContainerItem, RoomItem,
     VertexHandle, snap, snap_point, qcolor,
 )
-from models import Container, Room, ROOM_PRESETS, copy_name, duplicate
+from models import (
+    Container, Room, ROOM_PRESETS, MIN_CONTAINER_SIZE, copy_name, duplicate,
+    fit_in_room, room_contains_rect,
+)
 
 # The modes. Plain strings keep them readable in the debugger and in the
 # toolbar code.
@@ -61,6 +65,10 @@ MODE_ADD_SHAPE = "add_shape"     # dragging out a preset room shape
 DEFAULT_SHAPE_SIZE = 160          # used when a preset is clicked, not dragged
 
 SCENE_SIZE = 8000        # how far you can pan in any direction
+
+# Where the way-out button sits. Shared with the 3D view through theme.py, so
+# the button does not shift when the toggle swaps one canvas for the other.
+EXIT_MARGIN = theme.CANVAS_EXIT_MARGIN
 MIN_ZOOM = 0.25
 MAX_ZOOM = 4.0
 CLOSE_DISTANCE = 18      # click this close to the first corner to close a shape
@@ -140,6 +148,28 @@ class FloorView(QGraphicsView):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
 
+        # The way out of a focused room. The same button the 3D view has, in
+        # the same corner, so stepping out is the same gesture whichever way
+        # you are looking at the room. Parented to the viewport rather than
+        # the view, or it would sit under the (hidden) scrollbars' frame.
+        self._exit_button = QPushButton("←  Back to floor plan",
+                                        self.viewport())
+        self._exit_button.setObjectName("canvasExit")
+        self._exit_button.setCursor(Qt.PointingHandCursor)
+        self._exit_button.setToolTip("Step out of this room  (Esc)")
+        self._exit_button.clicked.connect(lambda: self.set_focused_room(None))
+        self._exit_button.hide()
+
+    def _place_exit_button(self):
+        """Size the way-out button and park it in the corner of the canvas."""
+        self._exit_button.setVisible(self.focused_room_item is not None)
+        self._exit_button.adjustSize()
+        self._exit_button.move(EXIT_MARGIN, EXIT_MARGIN)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_exit_button()
+
     # -- loading a floor ----------------------------------------------------
 
     def set_floor(self, profile, floor):
@@ -182,16 +212,19 @@ class FloorView(QGraphicsView):
         self.editModeChanged.emit(mode)
 
     def refresh(self):
-        """Redraw everything without rebuilding it.
+        """Redraw everything from the current data, without rebuilding it.
 
-        Used when data changed elsewhere -- a room was renamed in the
-        inspector, or items moved between containers -- and the shapes just
-        need to repaint with new text.
+        From the CURRENT DATA, which is the part that took a bug to learn.
+        This used to repaint each shape and stop there, which is fine when
+        only the text changed -- a rename, or items moving between
+        containers. But the 3D view edits the model directly, and in a
+        QGraphicsScene an item that is never told keeps its own position and
+        goes on drawing in the old place. Move a cabinet in 3D, step back out
+        to the floor plan, and it was still where it used to be, until
+        something happened to rebuild the room.
         """
         for room_item in self.room_items:
-            room_item.update()
-            for container_item in room_item.container_items:
-                container_item.update()
+            room_item.sync_from_model()
 
     def rebuild_room(self, room):
         for room_item in self.room_items:
@@ -346,7 +379,9 @@ class FloorView(QGraphicsView):
             # actually reaches the disk.
             self.scene().clearSelection()
             item.setSelected(True)
-            return
+            return made
+
+        return None
 
     def set_room_locked(self, room_item, locked):
         """Lock or unlock one room, and save the change."""
@@ -435,6 +470,7 @@ class FloorView(QGraphicsView):
             candidate.set_focused(is_focused)
             candidate.set_dimmed(room_item is not None and not is_focused)
 
+        self._place_exit_button()
         self.roomFocused.emit(room_item.room if room_item else None)
 
     # -- selection -------------------------------------------------------------
@@ -486,6 +522,27 @@ class FloorView(QGraphicsView):
                 return room_item
         return None
 
+    def _container_item_at(self, scene_point):
+        """Which container is under this point, if any.
+
+        Only used to answer "did you click bare canvas?", and it exists
+        because a container can be drawn outside the outline of its own room:
+        in the corner notch of an L-shape, or in a save file from a version
+        that let you drag one out through a wall.
+
+        Without this, clicking one of those reads as a click on nothing. The
+        room loses focus, every container in it stops accepting the mouse,
+        and the one you were trying to grab becomes untouchable -- which is
+        exactly how a container used to get stuck. Clicking a container is
+        never a click on nothing.
+        """
+        for room_item in reversed(self.room_items):
+            for container_item in room_item.container_items:
+                local = container_item.mapFromScene(scene_point)
+                if container_item.rect().contains(local):
+                    return container_item
+        return None
+
     # -- mouse ---------------------------------------------------------------------
 
     def _pan_by(self, delta):
@@ -534,7 +591,8 @@ class FloorView(QGraphicsView):
 
         # Select mode: clicking bare canvas clears focus and selection.
         if self.mode == MODE_SELECT and event.button() == Qt.LeftButton:
-            if self._room_item_at(scene_point) is None:
+            if (self._room_item_at(scene_point) is None
+                    and self._container_item_at(scene_point) is None):
                 if self.focused_room_item is not None:
                     self.set_focused_room(None)
 
@@ -835,6 +893,31 @@ class FloorView(QGraphicsView):
         rect = QRectF(self._box_origin, current).normalized()
         self._box_preview.setRect(rect)
 
+        # Red once the footprint would land outside the room, so the refusal
+        # on release is never a surprise. Trimming it against the wall is
+        # still what happens for a straight overshoot; this is about the
+        # notch of an L-shape, where there is no sensible trim.
+        fits = self._box_fits(rect)
+        color = theme.ACCENT if fits else theme.DANGER
+        pen = self._box_preview.pen()
+        pen.setColor(qcolor(color, 0.95))
+        self._box_preview.setPen(pen)
+        self._box_preview.setBrush(QBrush(qcolor(color, 0.16)))
+
+    def _box_fits(self, scene_rect):
+        """Would the footprint being dragged out sit inside the room?"""
+        if self._box_room_item is None:
+            return False
+        room = self._box_room_item.room
+        local = self._box_room_item.mapRectFromScene(scene_rect)
+        left, top, room_w, room_h = room.bounds()
+        local = local.intersected(QRectF(left, top, room_w, room_h))
+        if local.width() < MIN_CONTAINER_SIZE or local.height() < MIN_CONTAINER_SIZE:
+            # Too small to become a container anyway, so nothing to warn about.
+            return True
+        return room_contains_rect(room, snap(local.x()), snap(local.y()),
+                                  local.width(), local.height())
+
     def _finish_box(self):
         if self._box_preview is None or self._box_room_item is None:
             self.cancel_draft()
@@ -842,21 +925,47 @@ class FloorView(QGraphicsView):
 
         rect = self._box_preview.rect()
         room_item = self._box_room_item
+        fitted = self._box_fits(rect)
         self.cancel_draft()
 
         if rect.width() < 20 or rect.height() < 20:
             return      # too small to be a real drag; treat it as a stray click
 
+        if not fitted:
+            # The preview has been red for a while by now, so this is the
+            # answer they were already being shown. Making a container
+            # somewhere other than where it was drawn would be worse.
+            return
+
         # Convert from scene coordinates into the room's own coordinates,
         # because that is how containers are stored.
-        top_left = room_item.mapFromScene(rect.topLeft())
-
         room = room_item.room
+        local = room_item.mapRectFromScene(rect)
+
+        # The drag begins inside a room but can finish anywhere, so what you
+        # dragged is a request, not an answer.
+        #
+        # Trim it against the walls: drag out through the right wall and you
+        # get a container that stops at the wall, which is what the wall being
+        # there ought to mean. Sliding the whole rectangle back in instead
+        # would hand you a room-wide container from a drag that was nowhere
+        # near that wide.
+        left, top, room_w, room_h = room.bounds()
+        local = local.intersected(QRectF(left, top, room_w, room_h))
+
+        # And then the shared clamp, which is the actual guarantee. Before it
+        # was here a container could be stored outside its own room, and once
+        # out there clicking it counted as clicking bare canvas: the room lost
+        # focus, every container in it stopped accepting the mouse, and the
+        # one you were reaching for could not be picked up at all.
+        x, y, width, height = fit_in_room(
+            room, snap(local.x()), snap(local.y()),
+            local.width(), local.height())
+
         container = Container(
             name=f"Container {len(room.containers) + 1}",
             color=theme.SWATCHES[(len(room.containers) + 2) % len(theme.SWATCHES)],
-            x=snap(top_left.x()), y=snap(top_left.y()),
-            w=rect.width(), h=rect.height(),
+            x=x, y=y, w=width, h=height,
         )
         item = room_item.add_container(container)
 
@@ -1033,16 +1142,27 @@ class FloorView(QGraphicsView):
     def _add_container_at(self, room_item, scene_point):
         """Drop a default-sized container where you right-clicked."""
         local = room_item.mapFromScene(scene_point)
-        left, top, width, height = room_item.room.bounds()
+        _, _, width, height = room_item.room.bounds()
 
-        box_width = min(120.0, max(40.0, width * 0.4))
-        box_height = min(90.0, max(40.0, height * 0.4))
+        wanted_width = min(120.0, max(40.0, width * 0.4))
+        wanted_height = min(90.0, max(40.0, height * 0.4))
 
-        # Center it on the click, then pull it back inside the walls.
-        x = snap(min(max(local.x() - box_width / 2, left),
-                     left + width - box_width))
-        y = snap(min(max(local.y() - box_height / 2, top),
-                     top + height - box_height))
+        # Center it on the click; fit_in_room pulls it back inside the walls.
+        #
+        # The click itself is always inside the room, but a default sized box
+        # centered on it can still reach into the notch of an L-shape. Try
+        # smaller boxes rather than refusing: you asked for a container here,
+        # and a smaller one here beats none at all.
+        for shrink in (1.0, 0.6, 0.35):
+            box_width = max(MIN_CONTAINER_SIZE, wanted_width * shrink)
+            box_height = max(MIN_CONTAINER_SIZE, wanted_height * shrink)
+            x, y, box_width, box_height = fit_in_room(
+                room_item.room,
+                snap(local.x() - box_width / 2),
+                snap(local.y() - box_height / 2),
+                box_width, box_height)
+            if room_contains_rect(room_item.room, x, y, box_width, box_height):
+                break
 
         existing = len(room_item.room.containers)
         container = Container(
