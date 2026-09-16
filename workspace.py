@@ -26,13 +26,15 @@ for search boxes, window resizing, and anything else that fires far more often
 than you want to react to it.
 """
 
+import json
 import os
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame, QLabel,
-    QButtonGroup, QMenu, QFileDialog, QMessageBox,
+    QButtonGroup, QMenu, QFileDialog, QMessageBox, QLineEdit, QPlainTextEdit,
+    QTextEdit,
 )
 
 import export
@@ -40,11 +42,15 @@ import storage
 import theme
 from items_section import ItemsSection
 from layout_section import LayoutSection
-from models import short
+from models import Profile, short
+from undo import History
 from widgets import ElidingLabel, button, divider
 
 SIDEBAR_WIDTH = 188
 SAVE_DELAY_MS = 500
+
+SECTION_LAYOUT = 0
+SECTION_ITEMS = 1
 
 
 class Workspace(QWidget):
@@ -55,6 +61,12 @@ class Workspace(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.profile = None
+
+        # Undo for this session. See undo.py for why it keeps whole copies.
+        self.history = History()
+        # True only while a snapshot is being put back, so that putting one
+        # back is not itself recorded as a change to undo.
+        self._restoring = False
 
         # Set up before anything can ask for a save.
         self._save_timer = QTimer(self)
@@ -105,6 +117,11 @@ class Workspace(QWidget):
             ("Ctrl+B", lambda: self._in_items(self.items_section.bulk_add)),
             ("Ctrl+D", lambda: self._in_layout(
                 self.layout_section.duplicate_selection)),
+            ("Ctrl+Z", self._undo_shortcut),
+            ("Ctrl+Y", self.redo),
+            # The other redo binding. Which one is "right" depends on which
+            # program someone learned it in, and supporting both costs a line.
+            ("Ctrl+Shift+Z", self.redo),
         ]
 
         for keys, action in bindings:
@@ -119,6 +136,20 @@ class Workspace(QWidget):
         """Switch to the Items screen, then do something there."""
         self._go(1)
         action()
+
+    def _undo_shortcut(self):
+        """Ctrl+Z, deciding first whether the text box you are in wants it.
+
+        Every text field in every program undoes your typing on Ctrl+Z, and
+        taking that away to revert a whole container move instead would be a
+        nasty surprise mid-word. So while the cursor is in a text box, the
+        text box gets it; everywhere else, the app does.
+        """
+        focused = self.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            focused.undo()
+            return
+        self.undo()
 
     def _in_layout(self, action):
         """Do something on the Layout screen, but only while you are on it.
@@ -185,12 +216,117 @@ class Workspace(QWidget):
         self._status.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._status)
 
+        layout.addLayout(self._build_undo_row())
         layout.addWidget(self._build_export_button())
         layout.addWidget(divider())
         layout.addWidget(button("← All profiles", "ghost",
                                 self._go_back))
 
         return bar
+
+    def _build_undo_row(self):
+        """Undo and redo, side by side in the sidebar.
+
+        In the sidebar rather than a toolbar because undo is not a Layout
+        thing or an Items thing, it is a program thing, and it should be in
+        the same place whichever screen you are on. Deleting a pile of items
+        is exactly the moment you want to see an undo button, and the Items
+        screen is where that happens.
+
+        A bare layout rather than a QWidget holding one. A wrapper widget
+        would take the stylesheet's background and draw a panel-colored band
+        across the sidebar, which looks like a mistake because it is one.
+        """
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(theme.SPACE_XS)
+
+        # size through the helper rather than setProperty afterwards: the
+        # stylesheet is matched when the widget is created, and a property set
+        # later needs the style re-polished before anything looks different.
+        self._undo_button = button("↶ Undo", "ghost", self.undo, size="sm")
+        self._redo_button = button("↷ Redo", "ghost", self.redo, size="sm")
+
+        line.addWidget(self._undo_button, 1)
+        line.addWidget(self._redo_button, 1)
+
+        self._refresh_undo_buttons()
+        return line
+
+    def _refresh_undo_buttons(self):
+        """Gray out whichever direction has nowhere to go.
+
+        A disabled button is an honest answer to "can I undo this?" and it
+        costs nothing to keep right. The tooltips say how many steps are
+        left, which is the one number a person actually wants here.
+        """
+        back, forward = self.history.depth()
+
+        self._undo_button.setEnabled(back > 0)
+        self._redo_button.setEnabled(forward > 0)
+
+        self._undo_button.setToolTip(
+            f"Undo the last change  (Ctrl+Z)\n{back} step"
+            + ("" if back == 1 else "s") + " back"
+            if back else "Nothing to undo yet  (Ctrl+Z)")
+        self._redo_button.setToolTip(
+            f"Redo  (Ctrl+Y)\n{forward} step"
+            + ("" if forward == 1 else "s") + " forward"
+            if forward else "Nothing to redo  (Ctrl+Y)")
+
+    # -- undo -------------------------------------------------------------------
+
+    def snapshot(self):
+        """The profile as JSON text: one entry in the undo history."""
+        if self.profile is None:
+            return None
+        return json.dumps(self.profile.to_dict(), separators=(",", ":"))
+
+    def undo(self):
+        self._go_to(self.history.undo(), "Undone", "Nothing to undo")
+
+    def redo(self):
+        self._go_to(self.history.redo(), "Redone", "Nothing to redo")
+
+    def _go_to(self, step, done_message, empty_message):
+        if step is None:
+            self._flash(empty_message)
+            return
+        self._restore(step)
+        self._flash(done_message)
+
+    def _restore(self, step):
+        """Put a remembered state back on screen.
+
+        Three things happen in an order that matters. The view state is read
+        BEFORE the profile is replaced, because it is read off the things that
+        are about to be thrown away. The screen is switched BEFORE the rebuild,
+        so the section being rebuilt is the visible one and lays out at its
+        real size. And the save happens directly rather than through the
+        timer, because going through the timer would come back round as a
+        change to record and undo would undo itself.
+        """
+        self._save_timer.stop()
+        self._restoring = True
+        try:
+            if step.section != self._stack.currentIndex():
+                self._go(step.section)
+
+            layout_state = self.layout_section.view_state()
+
+            self.profile = Profile.from_dict(json.loads(step.snapshot))
+            self.layout_section.rebind_profile(self.profile, layout_state)
+            self.items_section.rebind_profile(self.profile)
+
+            storage.save_profile(self.profile)
+        finally:
+            self._restoring = False
+
+        self._refresh_undo_buttons()
+
+    def _flash(self, message):
+        self._status.setText(message)
+        self._status_timer.start(1400)
 
     def _build_export_button(self):
         export_button = button("Export ▾", "ghost")
@@ -288,9 +424,21 @@ class Workspace(QWidget):
         self._layout_button.setChecked(True)
         self._stack.setCurrentIndex(0)
 
+        # After the sections are set up, not before. set_profile can itself
+        # change the data -- a profile with no floors gets given one -- and
+        # starting the history here means that arrives as part of where you
+        # began rather than as a change you can undo away.
+        self.history.start(self.snapshot())
+        self._refresh_undo_buttons()
+
     def _go_back(self):
         # Never leave an edit sitting in the timer when the screen changes.
         self.flush_save()
+        # The history belongs to the profile that was open, so it goes with
+        # it. Undoing your way from one profile into another is not a thing
+        # anyone wants, and leaving the stack lying around is how it happens.
+        self.history.clear()
+        self._refresh_undo_buttons()
         self.backRequested.emit()
 
     # -- saving -------------------------------------------------------------------
@@ -299,6 +447,13 @@ class Workspace(QWidget):
         """Ask for a save shortly. Restarts the clock if one is already
         pending, so a burst of changes results in a single write."""
         if self.profile is None:
+            return
+        if self._restoring:
+            # Rebuilding the screens around a restored profile makes widgets
+            # report changes -- a selection cleared, a list refilled -- and
+            # none of them are edits. The restore has already written the file
+            # itself, so the honest answer to all of it is "no thank you".
+            # Without this, undo could hand itself a step to undo.
             return
         self._save_timer.start(SAVE_DELAY_MS)
 
@@ -314,5 +469,12 @@ class Workspace(QWidget):
             return
         storage.save_profile(self.profile)
 
-        self._status.setText("Saved")
-        self._status_timer.start(1400)
+        # An undo step per save, which is a better unit than it sounds. The
+        # save is already debounced by half a second, so a drag across the
+        # floor is one save and one step, and a burst of typing is one save
+        # and one step, rather than one per mouse move and one per letter.
+        if not self._restoring:
+            if self.history.record(self.snapshot(), self._stack.currentIndex()):
+                self._refresh_undo_buttons()
+
+        self._flash("Saved")

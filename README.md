@@ -82,7 +82,8 @@ place. A container is a thing you open.
 | `storage.py` | Loading and saving. One JSON file per profile. |
 | `widgets.py` | Shared UI pieces: color picker, tag chips, dialogs |
 | `profile_screen.py` | The launcher: the profile list and its floor plan preview |
-| `workspace.py` | The sidebar shell, the autosave timer, keyboard shortcuts |
+| `workspace.py` | The sidebar shell, the autosave timer, undo, keyboard shortcuts |
+| `undo.py` | The undo and redo stacks for the current session |
 | `layout_section.py` | Floors, toolbar, and the wiring between canvas and inspector |
 | `floor_view.py` | The canvas: grid, zoom, pan, drawing tools |
 | `floor_items.py` | How a room and a container draw and drag themselves, and how a floor is rendered anywhere else |
@@ -409,6 +410,42 @@ floor above rather than just doing nothing. Same going down, which is how you
 add a basement. Right-click any floor in the stack for duplicate, rename and
 delete, aimed at the floor you clicked rather than the one that's selected.
 
+**Undo.** Undo and redo sit in the sidebar, on both screens, with Ctrl+Z and
+Ctrl+Y. Move a container and undo puts it back; delete a pile of items and
+undo brings them back with their quantities and tags. The buttons gray out
+when there's nowhere to go, and their tooltips say how many steps are left.
+
+It lasts as long as the app is open, and no longer. Close the program and the
+history is gone, which is deliberate: undo is for "that wasn't what I meant",
+a feeling that lasts about ten seconds. A history that outlived the program
+would be a different feature with awkward questions to answer, like what
+undoing past a change made on your other computer is supposed to mean. The
+save files are the long-term safety net; this is the short-term one.
+
+It works by keeping whole copies of the profile rather than by knowing how to
+reverse each action, and `undo.py` explains at length why that trade is the
+right way round. The short version: an action-based undo needs a correct
+opposite for every action forever, and one wrong opposite corrupts your data
+instead of restoring it. A copy has nothing to get wrong. A real profile is a
+few kilobytes of JSON, so a hundred of them costs less than a megabyte.
+
+Three details it took building to notice:
+
+- **One step per save, not per change.** Saving is already debounced by half a
+  second, so a drag across the floor is one step and a burst of typing is one
+  step, rather than one per mouse move and one per letter. Snapshots are
+  compared as text, so a change that changed nothing never becomes a step you
+  have to press undo for twice.
+- **Undo takes you to the screen the change happened on.** Each step
+  remembers where it was made. Reverting something on a screen you can't see
+  is how undo loses people's trust.
+- **It doesn't lose your place.** Restoring replaces the whole profile, so
+  every room and container on screen is a new object and both screens have to
+  be rebuilt from them. The floor you were on, the room you'd stepped into,
+  your selection, your zoom, your search box and your tag filter are all put
+  back, matched by id. Losing your place is how undo goes from a safety net to
+  something you avoid pressing.
+
 **Duplicating.** Ctrl+D copies the selected room or container, or use the
 right-click menu. Floors are duplicated from their own menu in the stack. A
 copy lands one grid square down and to the right, named "Kitchen copy", then
@@ -514,6 +551,8 @@ out of step with the app.
 | `Ctrl+N` | new item |
 | `Ctrl+B` | add many |
 | `Ctrl+D` | duplicate the selected room or container |
+| `Ctrl+Z` | undo (or undo your typing, inside a text box) |
+| `Ctrl+Y` | redo. `Ctrl+Shift+Z` does the same |
 | `Esc` in 3D | cancel the tool, or step out of the room |
 | `Esc` | cancel a tool, step out of a room |
 | `Delete` | remove whatever's selected on the canvas |
@@ -715,6 +754,28 @@ The wiring mattered too. `_on_data_changed` refreshed only the 3D view, on the
 reasoning that the flat canvas is usually what raised the change and so
 already knows. Usually is not always, and "usually" is where these live.
 
+And there was a third one hiding behind the second. The first version of
+`sync_from_model` assumed the list of containers was unchanged, leaving
+anything structural to `rebuild()`. That held right up until the 3D view began
+adding containers: a box drawn in 3D existed in the data and had no shape on
+the flat plan, so stepping back out it simply was not there. Now the method
+compares the list and rebuilds if it differs, which costs nothing and means no
+caller has to know which kind of change it just made. Three bugs, one shape:
+somebody has to be told, and "the other code will have handled it" is not a
+person.
+
+**In a Qt stylesheet, an attribute selector beats a pseudo-state.** There is a
+`QPushButton:disabled` rule that grays buttons out, and a
+`QPushButton[kind="ghost"]` rule that colors ghost ones. A disabled ghost
+button gets the ghost color, because the attribute wins, so the undo button
+looked exactly the same whether there was anything to undo or not. It needs
+its own `QPushButton[kind="ghost"]:disabled` rule.
+
+Worth testing in pixels rather than by reading the stylesheet, which is what
+`undo_test.py` does: it renders the same button enabled and disabled and
+checks the two images differ. Nothing else can tell you whether the cascade
+came out the way you meant.
+
 **QColor cannot read the string with_alpha gives you.** `with_alpha` returns
 `"rgba(79, 124, 255, 0.16)"`, which is what a Qt STYLESHEET wants. Hand that
 to `QColor` and it does not complain, it does not raise, it just gives you
@@ -771,7 +832,5 @@ antivirus far less often than `--onefile`.
   container inspector are the only places that need to show it.
 - **Count sessions.** Pick a room, walk it, confirm or correct each container's
   quantities, get a summary of what changed at the end.
-- **Undo.** Needs a proper design, either a stack of operations or snapshots of
-  the profile. Worth doing deliberately rather than bolting on.
 - **Container shapes.** Containers are rectangles right now. They could use the
   same polygon code rooms use.

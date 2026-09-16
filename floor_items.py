@@ -548,7 +548,12 @@ class RoomItem(QGraphicsPolygonItem):
         picture can never disagree with the data.
         """
         self._apply_polygon()
+        self._rebuild_containers()
+        self._rebuild_handles()
+        self.set_focused(self.focused)      # also settles movability
 
+    def _rebuild_containers(self):
+        """Throw the container shapes away and make them again from the data."""
         for old in self.container_items:
             if old.scene():
                 old.scene().removeItem(old)
@@ -559,24 +564,43 @@ class RoomItem(QGraphicsPolygonItem):
             self.container_items.append(
                 ContainerItem(container, self, self.profile))
 
-        self._rebuild_handles()
-        self.set_focused(self.focused)      # also settles movability
-
     def _apply_polygon(self):
         self.setPolygon(QPolygonF([QPointF(x, y) for x, y in self.room.points]))
 
     def sync_from_model(self):
-        """Put the drawn shapes back where the data says they are.
+        """Put the drawn shapes back in line with the data, whatever changed.
 
-        Cheaper than rebuild() and it keeps selection, because it moves the
-        existing items rather than throwing them away. The list of containers
-        is assumed unchanged -- anything structural still goes through
-        rebuild().
+        Cheaper than rebuild() and it keeps selection, because where it can it
+        moves the existing items rather than throwing them away.
+
+        It does check whether the containers are still the same ones, though,
+        and that check is not paranoia. The first version assumed the list was
+        unchanged and left anything structural to rebuild(), which was fine
+        until the 3D view started adding containers: a box drawn in 3D existed
+        in the data and had no shape on the flat plan, so it simply was not
+        there when you stepped back out. Comparing the list costs nothing and
+        means no caller has to know which kind of change it just made.
         """
         if (self.pos().x(), self.pos().y()) != (self.room.x, self.room.y):
             self.setPos(self.room.x, self.room.y)
-        self.update()
 
+        if self.polygon() != QPolygonF([QPointF(x, y)
+                                        for x, y in self.room.points]):
+            self.prepareGeometryChange()
+            self._apply_polygon()
+            self._rebuild_handles()
+            self.set_focused(self.focused)
+
+        # By id and in order: a reorder changes what is drawn on top of what,
+        # so it is a real difference and not just a set comparison.
+        drawn = [item.container.id for item in self.container_items]
+        if drawn != [c.id for c in self.room.containers]:
+            self._rebuild_containers()
+            self.set_focused(self.focused)
+            self.update()
+            return
+
+        self.update()
         for container_item in self.container_items:
             container_item.sync_from_model()
 

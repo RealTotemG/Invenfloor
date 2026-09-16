@@ -332,6 +332,15 @@ def stylesheet():
         background-color: {BG_HOVER};
         color: {TEXT};
     }}
+    /* Needed on top of the general QPushButton:disabled rule above, because
+       an attribute selector beats a pseudo-state in Qt: without this, a
+       disabled ghost button keeps its normal color and there is no way to
+       tell "nothing to undo" from "undo is right here". */
+    QPushButton[kind="ghost"]:disabled {{
+        background-color: transparent;
+        border-color: transparent;
+        color: {TEXT_FAINT};
+    }}
 
     /* The way out of a room, floating in the corner of the canvas. Solid and
        outlined rather than ghosted: it sits on top of a drawing, and a

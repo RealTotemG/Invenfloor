@@ -920,6 +920,21 @@ class ItemsSection(QWidget):
         self._create_button.hide()
         self.reload()
 
+    def rebind_profile(self, profile):
+        """Point at a replacement profile without resetting the screen.
+
+        Undo reads a snapshot back into a brand new Profile, so every item and
+        tag on screen has to be rebuilt from the new one. The search box, the
+        tag filter and which rows are expanded are not data though, they are
+        what the person had set up to look at, and undo has no business
+        clearing them.
+
+        This works because all of that is kept as ids and text rather than as
+        object references, so it still means the same thing after the rebuild.
+        """
+        self.profile = profile
+        self.reload()
+
     def reload(self):
         if self.profile is None:
             return

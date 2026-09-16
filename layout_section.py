@@ -451,7 +451,106 @@ class LayoutSection(QWidget):
         self.strip.set_profile(profile, self.current_index)
         self.show_floor(0)
 
-    def show_floor(self, index):
+    # -- being handed a replacement profile -----------------------------------
+    #
+    # Undo does not edit the profile, it replaces it: a snapshot is read back
+    # into a brand new Profile with brand new rooms, containers and items
+    # inside it. Everything drawn has to be rebuilt from those.
+    #
+    # What must NOT be rebuilt is where the person was looking. The floor they
+    # were on, the room they had stepped into, what they had selected, how far
+    # they had zoomed in: none of that is data, it is the view, and undo has no
+    # business resetting it. Losing your place is how undo goes from a safety
+    # net to something you avoid pressing.
+
+    def view_state(self):
+        """Where the person is looking, as values that survive a rebuild.
+
+        Ids and numbers only, never an object. Every room and container is
+        about to be replaced, so anything holding a reference would come back
+        pointing at the old ones.
+        """
+        focused = self.view.focused_room_item
+        return {
+            "floor": self.current_index,
+            "room_id": focused.room.id if focused is not None else None,
+            "selected_id": getattr(self.inspector.selection, "id", None),
+            "edit_mode": self.view.room_edit_mode,
+            "transform": self.view.transform(),
+            "center": self.view.mapToScene(
+                self.view.viewport().rect().center()),
+        }
+
+    def rebind_profile(self, profile, state=None):
+        """Point at a replacement profile, keeping the view where it was."""
+        self.profile = profile
+        self.inspector.set_profile(profile)
+
+        self._view_3d_button.blockSignals(True)
+        self._view_3d_button.setChecked(profile.view_3d)
+        self._view_3d_button.blockSignals(False)
+
+        if not profile.floors:
+            self.show_floor(0)
+            return
+
+        index = (state or {}).get("floor", self.current_index)
+        self.show_floor(max(0, min(index, len(profile.floors) - 1)), fit=False)
+
+        if state is None:
+            self.view.fit_to_rooms()
+            return
+
+        self.view.set_room_edit_mode(state.get("edit_mode",
+                                               self.view.room_edit_mode))
+
+        # The camera, before anything else moves: restoring the transform and
+        # then re-centering is what stops the floor plan jumping under you.
+        transform = state.get("transform")
+        if transform is not None:
+            self.view.setTransform(transform)
+            self.view._zoom = transform.m11()
+        center = state.get("center")
+        if center is not None:
+            self.view.centerOn(center)
+
+        room_id = state.get("room_id")
+        if room_id is not None:
+            for room_item in self.view.room_items:
+                if room_item.room.id == room_id:
+                    self.view.set_focused_room(room_item)
+                    break
+
+        self._reselect(state.get("selected_id"))
+
+    def _reselect(self, object_id):
+        """Put the selection back on the room or container with this id.
+
+        By id rather than by object, and quietly if it is not there any more:
+        undoing the creation of a container means the thing that was selected
+        no longer exists, which is a normal outcome and not an error.
+        """
+        if object_id is None:
+            self.view.scene().clearSelection()
+            self.room_3d.select(None)
+            self.inspector.show_selection(None)
+            return
+
+        for room_item in self.view.room_items:
+            if room_item.room.id == object_id:
+                room_item.setSelected(True)
+                return
+            for container_item in room_item.container_items:
+                if container_item.container.id == object_id:
+                    if self.showing_3d():
+                        self.room_3d.select(container_item.container)
+                    else:
+                        container_item.setSelected(True)
+                    return
+
+        self.inspector.show_selection(None)
+
+    def show_floor(self, index, fit=True):
         if self.profile is None or not self.profile.floors:
             return
         index = max(0, min(index, len(self.profile.floors) - 1))
@@ -462,7 +561,10 @@ class LayoutSection(QWidget):
         self._floor_label.setText(short(floor.name))
         self._floor_label.setToolTip(floor.name)
         self.view.set_floor(self.profile, floor)
-        self.view.fit_to_rooms()
+        if fit:
+            # Skipped when something is restoring a remembered camera, which
+            # would otherwise be overwritten the moment it was put back.
+            self.view.fit_to_rooms()
         self.strip.set_profile(self.profile, index)
         # set_floor drops the focused room, so the 3D view has nothing left to
         # show and the flat canvas comes back.
