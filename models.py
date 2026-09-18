@@ -659,6 +659,11 @@ def room_contains_rect(room, x, y, width, height):
     room, where it sits inside the room's bounding rectangle but outside the
     room itself. On a flat plan that only looks like empty canvas; in the 3D
     view the box stands over nothing at all, which is how it got noticed.
+
+    It takes four questions, and the order they arrived in is the order they
+    are asked. Each one rules out a shape of mistake the ones before it let
+    through, which is worth saying plainly because the first version looked
+    finished and was not.
     """
     points = room.points
     if len(points) < 3:
@@ -667,17 +672,47 @@ def room_contains_rect(room, x, y, width, height):
     corners = [(x, y), (x + width, y),
                (x + width, y + height), (x, y + height)]
 
+    # 1. Every corner has to be in the room. This is the obvious one, and on
+    #    its own it catches a container dragged out through a wall.
     if not all(point_in_polygon(points, px, py) for px, py in corners):
         return False
 
-    # Four corners inside is not quite the whole story. A wall could slice
-    # straight across the rectangle with both its ends outside it, which the
-    # square notch of an L-shape can never do but a narrow spike can. Cheap
-    # to rule out, so rule it out.
+    # 2. No wall may slice across the rectangle with both ends outside it.
+    #    The square notch of an L-shape can never do that, but a narrow spike
+    #    can, and it would slip past the corner test untouched.
     for wall_a, wall_b in walls_of(points):
         for edge_a, edge_b in walls_of(corners):
             if segments_cross(edge_a, edge_b, wall_a, wall_b):
                 return False
+
+    # 3. No corner of the ROOM may sit inside the rectangle.
+    #
+    #    This is the one a fireplace found. A small divot cut into a wall --
+    #    a hearth, an alcove, a boxed-in pipe -- can be smaller than the
+    #    container being dragged over it. Then the divot sits entirely INSIDE
+    #    the rectangle, so none of its walls cross any edge and all four
+    #    corners are still in the room. Everything above says yes, and the
+    #    container is sitting on top of a hole in the floor.
+    #
+    #    A room corner inside the rectangle is exactly what that looks like.
+    #    Strictly inside: a container pushed flush into a corner has a room
+    #    corner sitting ON its edge, and that is the most natural place in
+    #    the room to put a cabinet.
+    for px, py in points:
+        if (x + ON_WALL < px < x + width - ON_WALL
+                and y + ON_WALL < py < y + height - ON_WALL):
+            return False
+
+    # 4. The middle of the rectangle has to be in the room.
+    #
+    #    Which sounds like it must already follow, and does not. Lay a
+    #    container exactly over that divot, edge for edge, and every corner
+    #    of it is a corner of the room, nothing crosses anything, and no room
+    #    corner is strictly inside it. The whole rectangle is outside the
+    #    room and every test above is satisfied. Only a point in the middle
+    #    of it can tell.
+    if not point_in_polygon(points, x + width / 2, y + height / 2):
+        return False
     return True
 
 

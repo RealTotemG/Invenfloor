@@ -322,6 +322,54 @@ because from a fixed camera you can never see the other three faces. Draw
 order is `x + y`, far to near, which is always right here because a drawer
 can't wrap around another drawer.
 
+**Which walls get drawn.** Only the ones facing away from you. A wall facing
+the camera would stand between you and the room, which is the cutaway every
+isometric game does, and it isn't a compromise: a room drawn with all its
+walls is a box you can't see into.
+
+Working out which is which took two goes. The first version asked whether a
+wall's midpoint sat behind the middle of the room. That's right for a
+rectangle every time, so it survived a long while, and it's exactly backwards
+for the notch of an L-shape: it drew the inner wall, which faces you, and
+skipped the back wall of the L's foot, which doesn't. You could see both
+mistakes at once, because a container standing against that inner wall was
+drawn straight over the top of it. A wall that shouldn't be there can't be
+behind anything.
+
+An edge knows which way it faces without being told where the middle of the
+room is. `is_far_wall` takes the edge's outward normal and asks whether it
+points away from the camera, which is just its two components adding to less
+than zero. The outward direction depends on which way round the corners were
+listed, so `winding` works that out from the signed area rather than assuming.
+
+**Where a wall goes in the draw order.** Walls used to all be drawn before
+any container, on the reasoning that a wall is behind the room it encloses.
+True for a rectangle, false for an L: the back wall of the foot stands in
+front of anything in the other arm, so a cabinet over there was painted on
+top of a wall it was standing behind.
+
+So walls and containers go into one list and get ordered together. What's
+surprising is that the plain depth sort is enough for that, given a wall runs
+the whole length of a side and so is nearer than some of the room and further
+than the rest. The argument:
+
+> if a wall is entirely in front of a box, its NEAR end is beyond the box's
+> near corner, so its FAR end is beyond the box's far corner too, because a
+> wall's far end is behind its near one.
+
+Sorting on the far corner therefore already puts that wall after that box, and
+the same runs the other way for a box in front of a wall. Cases where the two
+interleave in depth have no right answer with flat polygons anyway. Equal
+depth means a container is pushed flush into the corner a wall starts from, so
+walls win ties.
+
+I wrote a general topological sort for this first, with a separating-axis test
+and swap passes over a partial order. Then I measured: across every room in my
+own save plus a preset L and a U, sixty-odd thousand placements, it never once
+changed the answer the depth sort already gave. Code that provably never runs
+is worse than no code, because you can't test it and it lulls you, so it went
+in the bin and the argument above went in its place.
+
 Which three is worth working out rather than guessing, and I guessed wrong the
 first time. A point is nearer the camera the bigger its `x + y`, so the
 nearest vertical edge of a box is at `(x+w, y+d)`, and the two sides you can
@@ -396,6 +444,37 @@ letting go makes nothing. The tool stays armed so the next drag is another
 attempt rather than a trip back to the toolbar. Right-clicking to drop one in
 tries a smaller box instead of refusing, because you named the spot and a
 smaller container there beats none at all.
+
+**What "inside the outline" actually takes.** Four questions, and the order
+they arrived in is the order they're asked, because the first version looked
+finished and wasn't.
+
+1. Every corner of the container is in the room. The obvious one, and on its
+   own it catches a container dragged out through a wall.
+2. No wall slices across the container with both ends outside it. A square
+   notch can't do that; a narrow spike can, and it would walk straight past
+   the corner test.
+3. No corner of the *room* sits strictly inside the container. This is the one
+   a fireplace found. A divot cut into a wall (a hearth, an alcove, a boxed-in
+   pipe) can be smaller than the container being dragged over it, and then the
+   divot sits entirely *inside* the container: none of its walls cross any
+   edge, all four corners are still in the room, and everything above says
+   yes while the container sits on a hole in the floor. Strictly inside,
+   because a container pushed flush into a corner has a room corner sitting on
+   its edge, and that's the most natural place in a room to put a cabinet.
+4. The middle of the container is in the room. Which sounds like it must
+   already follow, and doesn't: lay a container exactly over that divot, edge
+   for edge, and every corner of it is a corner of the room, nothing crosses
+   anything, no room corner is strictly inside it, and the whole thing is
+   outside the room. Only a point in the middle can tell.
+
+`divot_test.py` pins all four against `QPainterPath.contains`, which answers
+the same question exactly, across thousands of random placements in a slotted
+room, a double-divot room, the L and a plain rectangle. Qt wants the rectangle
+strictly inside so it rejects anything flush against a wall, which is why it's
+the test's oracle and not the implementation: pull the rectangle in by a hair
+first and the two agree everywhere. If there's a fifth hole, that's where it
+surfaces.
 
 A container already stranded outside is never trapped by any of this: if where
 it sits is not inside either, the move goes through, because the alternative

@@ -242,18 +242,36 @@ class RoomView3D(QWidget):
         painter.scale(self._zoom, self._zoom)
 
         points = [(px, py) for px, py in self.room.points]
-        iso.draw_room(painter, points, self.room.color)
+        iso.draw_floor(painter, points, self.room.color)
 
-        # Far to near. See the note on draw order in iso.py.
-        for container in sorted(self.room.containers,
-                                key=lambda c: iso.depth(c.x, c.y)):
-            iso.draw_box(painter, container.x, container.y,
-                         container.w, container.h, container.height,
-                         container.color,
-                         tiers=container.tier_count,
-                         selected=container is self.selected)
+        # Walls and containers go in ONE list and are ordered together.
+        #
+        # The walls used to all be drawn first, on the reasoning that a wall
+        # is behind the room it encloses. That holds for a rectangle. It does
+        # not hold for an L: the back wall of the L's foot stands in FRONT of
+        # anything in the L's other arm, and drawing it first left a cabinet
+        # sitting on top of a wall it was standing behind.
+        # The second number is the tie-break, and walls win ties on purpose.
+        # Equal depth means a container is pushed flush into the corner the
+        # wall starts from, and a wall is always behind what stands against
+        # it.
+        pieces = (
+            [(iso.footprint_depth(iso.wall_footprint(wall)), 0, "wall", wall)
+             for wall in iso.far_walls(points)]
+            + [(iso.depth(c.x, c.y), 1, "box", c)
+               for c in self.room.containers])
+        pieces.sort(key=lambda piece: (piece[0], piece[1]))
 
-            self._draw_box_label(painter, container)
+        for _, _, kind, thing in pieces:
+            if kind == "wall":
+                iso.draw_wall(painter, thing[0], thing[1], self.room.color)
+                continue
+
+            iso.draw_box(painter, thing.x, thing.y, thing.w, thing.h,
+                         thing.height, thing.color,
+                         tiers=thing.tier_count,
+                         selected=thing is self.selected)
+            self._draw_box_label(painter, thing)
 
         if self.selected is not None:
             self._draw_handles(painter)

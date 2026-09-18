@@ -231,38 +231,140 @@ def draw_box(painter, x, y, w, d, height, color, tiers=0, selected=False):
         painter.drawPolygon(box_outline(x, y, w, d, height))
 
 
-def draw_room(painter, points, color, wall_height=WALL_HEIGHT):
-    """The floor slab, then the two walls furthest from the camera.
+def winding(points):
+    """+1 or -1 for which way round a polygon's corners were listed.
 
-    Only the far walls, because the near ones would stand between you and
-    everything in the room. This is the cutaway every isometric game does,
-    and it is not a compromise: a room drawn with all four walls is a box you
-    cannot see into.
+    Twice the signed area, reduced to its sign. Needed because the corners of
+    a room are whatever order someone clicked them in, and every question of
+    the form "which side of this edge is the inside?" flips with that order.
+    """
+    twice_area = sum(ax * by - bx * ay for (ax, ay), (bx, by)
+                     in zip(points, points[1:] + points[:1]))
+    return -1.0 if twice_area < 0 else 1.0
+
+
+def outward_normal(ax, ay, bx, by, sense):
+    """Which way an edge faces, pointing out of the room.
+
+    For corners listed one way round the outward normal of A to B is
+    (dy, -dx); listed the other way it is the opposite, which is what `sense`
+    from winding() above is for. Not normalized: only the direction is ever
+    asked about.
+    """
+    return (sense * (by - ay), sense * -(bx - ax))
+
+
+def is_far_wall(ax, ay, bx, by, sense):
+    """Does this wall face away from the camera, so you see its inside?
+
+    Those are the ones to draw. A wall facing the camera would stand between
+    you and the room, which is what the cutaway exists to avoid.
+
+    The camera looks down the x + y diagonal, so "facing away" is just the
+    normal's two components adding to less than zero.
+
+    THIS USED TO COMPARE AGAINST THE MIDDLE OF THE ROOM, AND THAT WAS WRONG.
+    The old test asked whether an edge's midpoint sat behind the room's
+    centroid. For a rectangle that gives the right answer every time, so it
+    survived a long while. For an L-shape it gets the notch exactly backwards:
+    the inner wall, which faces the camera and should be cut away, sits behind
+    the centroid and was drawn, while the back wall of the L's foot, which
+    should be there, sits in front of it and was skipped.
+
+    You could see both mistakes at once. A container standing against that
+    inner wall was drawn over the top of it, because a wall that should not
+    have been there cannot be behind anything. An edge knows which way it
+    faces without being told where the middle of the room is, so now it is
+    asked directly.
+    """
+    nx, ny = outward_normal(ax, ay, bx, by, sense)
+    return nx + ny < 0
+
+
+def far_walls(points):
+    """The walls worth drawing: the ones facing away from the camera.
+
+    Returned as ((ax, ay), (bx, by)) pairs so the caller can decide when each
+    one is drawn, which matters because a wall is not always behind
+    everything standing in the room. See draw_order below.
     """
     if len(points) < 3:
+        return []
+    sense = winding(points)
+    return [(a, b) for a, b in zip(points, points[1:] + points[:1])
+            if is_far_wall(a[0], a[1], b[0], b[1], sense)]
+
+
+def draw_floor(painter, points, color):
+    """The floor slab, under everything."""
+    if len(points) < 3:
         return
-
-    floor = [(px, py, 0.0) for px, py in points]
-
     painter.setBrush(QBrush(QColor(theme.mix(color, theme.CANVAS_BG, 0.74))))
     painter.setPen(QPen(theme.qcolor(color, 0.9), 1.6))
-    painter.drawPolygon(polygon(floor))
+    painter.drawPolygon(polygon([(px, py, 0.0) for px, py in points]))
 
-    middle_x = sum(px for px, _ in points) / len(points)
-    middle_y = sum(py for _, py in points) / len(points)
 
-    for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
-        # An edge is far when its midpoint sits behind the middle of the room
-        # along the camera's diagonal. The same test decides which wall to
-        # draw for any shape, which is why an L-shaped room works without a
-        # special case.
-        toward_camera = (((ax + bx) / 2 - middle_x)
-                         + ((ay + by) / 2 - middle_y))
-        if toward_camera >= 0:
-            continue
-        fill(painter, polygon([(ax, ay, 0), (bx, by, 0),
-                               (bx, by, wall_height), (ax, ay, wall_height)]),
-             color, -0.08)
+def draw_wall(painter, a, b, color, wall_height=WALL_HEIGHT):
+    (ax, ay), (bx, by) = a, b
+    fill(painter, polygon([(ax, ay, 0), (bx, by, 0),
+                           (bx, by, wall_height), (ax, ay, wall_height)]),
+         color, -0.08)
+
+
+def draw_room(painter, points, color, wall_height=WALL_HEIGHT):
+    """The floor and every far wall, in one call.
+
+    The simple version, for drawing an empty room. With containers in it the
+    3D view interleaves the walls with the boxes instead, because a wall is
+    not always behind them.
+    """
+    draw_floor(painter, points, color)
+    for a, b in far_walls(points):
+        draw_wall(painter, a, b, color, wall_height)
+
+
+# ---------------------------------------------------------------------------
+# WHERE A WALL GOES IN THE DRAW ORDER
+# ---------------------------------------------------------------------------
+#
+# Boxes are drawn far to near by the depth of their far corner, which is the
+# note at the top of this file. Walls have to go in the same ordering, and it
+# is worth writing down why the same simple rule is enough for them, because
+# it does not look like it should be.
+#
+# A wall runs the whole length of a side of a room. It is nearer the camera
+# than some of what shares the room with it and further than the rest, so you
+# cannot say "this wall is at depth N" and have that mean much.
+#
+# But the only orderings that MATTER are the ones where something is entirely
+# in front of something else, because those are the ones you can see go
+# wrong. And there the rule falls out:
+#
+#     if a wall is entirely in front of a box, then the wall's NEAR end is
+#     beyond the box's near corner -- and the wall's FAR end is beyond the
+#     box's far corner too, because a wall's far end is behind its near one.
+#
+# So sorting by the far end already puts that wall after that box. The same
+# argument runs the other way for a box in front of a wall. Cases where the
+# two interleave in depth have no correct answer with flat polygons anyway.
+#
+# Everything here describes a thing by its FOOTPRINT: the (x0, y0, x1, y1) it
+# covers on the floor. A wall's footprint is flat, zero wide in one
+# direction, which is fine because nothing divides by it.
+
+def box_footprint(x, y, w, d):
+    return (x, y, x + w, y + d)
+
+
+def wall_footprint(wall):
+    """Takes a wall the way far_walls hands them out: ((ax, ay), (bx, by))."""
+    (ax, ay), (bx, by) = wall
+    return (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+
+
+def footprint_depth(footprint):
+    """How far the furthest corner of a footprint is from the camera."""
+    return depth(footprint[0], footprint[1])
 
 
 def label(painter, point, text, color, size, bold=True, width=200):
