@@ -33,6 +33,13 @@ from widgets import (
 PANEL_WIDTH = 300
 
 
+def _dim_label(text):
+    """The little faint letter that sits before a measurement box."""
+    made = QLabel(text)
+    made.setStyleSheet(f"color: {theme.TEXT_FAINT};")
+    return made
+
+
 class Inspector(QWidget):
     """Shows and edits the current canvas selection."""
 
@@ -56,6 +63,7 @@ class Inspector(QWidget):
         self.edit_mode = EDIT_MOVE
         # The two size boxes, when a room is showing. See room_resized().
         self._width_field = None
+        self._height_picker_box = None
         self._height_field = None
         self._sized_room = None
         self._sized_container = None
@@ -131,6 +139,7 @@ class Inspector(QWidget):
         self.selection = selection
         # Dropped now, and set again by whichever size block runs below.
         self._width_field = None
+        self._height_picker_box = None
         self._height_field = None
         self._sized_room = None
         self._sized_container = None
@@ -157,6 +166,23 @@ class Inspector(QWidget):
 
         layout.addStretch()
         body.setMaximumWidth(self._scroll.viewport().width())
+
+        # Take the old panel out and let Qt delete it LATER, rather than
+        # letting setWidget destroy it on the spot.
+        #
+        # setWidget takes ownership and frees whatever was there immediately.
+        # Most of this panel is rebuilt from a button, and a button being
+        # deleted inside its own click handler is survivable. A combo box is
+        # not: the tier dropdowns rebuild the panel when you pick a tier, so
+        # the widget whose signal is still running gets freed underneath it,
+        # and the app dies with a segfault rather than an error.
+        #
+        # deleteLater holds the old panel until the current event is finished
+        # and the stack is clear. One line here instead of remembering the
+        # hazard at every call site that rebuilds.
+        stale = self._scroll.takeWidget()
+        if stale is not None:
+            stale.deleteLater()
         self._scroll.setWidget(body)
 
     # -- nothing selected -----------------------------------------------------
@@ -257,7 +283,9 @@ class Inspector(QWidget):
         # scrolling.
         row_layout.setContentsMargins(theme.SPACE_SM, theme.SPACE_XS,
                                       theme.SPACE_SM, theme.SPACE_XS)
-        row_layout.setSpacing(theme.SPACE_SM)
+        # Tight, because these rows carry up to five things across a 300px
+        # panel and every pixel of spacing comes out of the item's name.
+        row_layout.setSpacing(theme.SPACE_XS)
 
         dot = QFrame()
         dot.setFixedSize(8, 8)
@@ -379,7 +407,7 @@ class Inspector(QWidget):
             "drag containers around", size="sm")
 
     def _size_block(self, layout, room):
-        """Exact width and height boxes.
+        """Exact length and width boxes.
 
         The handles on the canvas are quicker, but if you know a room is four
         meters across you want to type it, not nudge it.
@@ -425,14 +453,15 @@ class Inspector(QWidget):
         width_field.valueChanged.connect(apply_size)
         height_field.valueChanged.connect(apply_size)
 
-        width_label = QLabel("W")
-        width_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
-        height_label = QLabel("H")
-        height_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
-
-        row.addWidget(width_label)
+        # LENGTH and WIDTH, not width and height. A floor plan has two
+        # measurements and neither of them is height: height is how tall a
+        # container stands, and it has nothing to do with the shape of a
+        # room. The model still calls the second one `h`, because it is
+        # written into every save file and it means depth on the plan. See
+        # the note on Container in models.py.
+        row.addWidget(_dim_label("L"))
         row.addWidget(width_field, 1)
-        row.addWidget(height_label)
+        row.addWidget(_dim_label("W"))
         row.addWidget(height_field, 1)
         layout.addLayout(row)
 
@@ -468,7 +497,7 @@ class Inspector(QWidget):
         layout.addWidget(label("Size", "caption"))
 
         row = QHBoxLayout()
-        row.setSpacing(theme.SPACE_SM)
+        row.setSpacing(theme.SPACE_XS)
 
         width_field = QSpinBox()
         height_field = QSpinBox()
@@ -480,7 +509,10 @@ class Inspector(QWidget):
         for field, value in ((width_field, container.w),
                              (height_field, container.h)):
             field.setRange(20, 4000)
-            field.setMinimumWidth(60)
+            # Narrower than the room's boxes, because a third control shares
+            # this row. Qt asks for enough room to show the largest value and
+            # its arrows and will not go below that on its own.
+            field.setMinimumWidth(48)
             field.setSingleStep(theme.GRID_SIZE)
             field.blockSignals(True)
             field.setValue(int(round(value)))
@@ -494,20 +526,27 @@ class Inspector(QWidget):
         width_field.valueChanged.connect(apply_size)
         height_field.valueChanged.connect(apply_size)
 
-        width_label = QLabel("W")
-        width_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
-        height_label = QLabel("H")
-        height_label.setStyleSheet(f"color: {theme.TEXT_FAINT};")
-
-        row.addWidget(width_label)
+        # LENGTH, WIDTH and HEIGHT on one line, in that order.
+        #
+        # Length and width are the footprint, the two measurements a floor
+        # plan actually has. Height is how tall the thing stands, which only
+        # the 3D view draws. They used to be two sections with a heading and
+        # a paragraph each, which is a lot of panel for three numbers that
+        # belong together: they are the size of the object.
+        #
+        # The model still calls the second one `h`. It is in every save file
+        # and it means depth on the plan, not height; see Container in
+        # models.py.
+        row.addWidget(_dim_label("L"))
         row.addWidget(width_field, 1)
-        row.addWidget(height_label)
+        row.addWidget(_dim_label("W"))
         row.addWidget(height_field, 1)
+        row.addWidget(_dim_label("H"))
+        row.addWidget(self._height_picker(container), 1)
         layout.addLayout(row)
 
         hint = QLabel("Switch to Resize and drag the handles, or type here. "
-                      "To move it instead, double-click the room to work "
-                      "inside it.")
+                      "Height is only drawn in the 3D room view.")
         wrapped(hint, grow=False)
         hint.setStyleSheet(
             f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
@@ -528,23 +567,32 @@ class Inspector(QWidget):
             field.setValue(int(round(value)))
             field.blockSignals(False)
 
-    def _height_block(self, layout, container):
-        """How tall the container stands, for the 3D room view.
+        # And the height, so dragging the green handle in the 3D view moves
+        # this dropdown as you go rather than only once you let go. Signals
+        # off, or catching up with the drag would read as the user asking for
+        # a height change and send it straight back.
+        if self._height_picker_box is not None:
+            showing = height_name(container.height)
+            self._height_picker_box.blockSignals(True)
+            self._height_picker_box.setCurrentIndex(
+                max(self._height_picker_box.findText(showing), 0))
+            self._height_picker_box.blockSignals(False)
 
-        A dropdown of four presets rather than a number box, because "waist
-        high" is something you know about your own furniture and "72" is not.
-        The 3D view's own handle can still drag it to anything in between, and
-        when it has, this shows the nearest preset so the box is never blank.
+    def _height_picker(self, container):
+        """How tall the container stands, as the third box on the size row.
+
+        A dropdown of presets rather than a number box, because "waist high"
+        is something you know about your own furniture and "72" is not. The
+        3D view's handle steps through the same presets, and this follows it
+        live while you drag.
         """
-        layout.addSpacing(theme.SPACE_XS)
-        layout.addWidget(label("Height", "caption"))
-
         picker = QComboBox()
         for name, value in CONTAINER_HEIGHTS:
             picker.addItem(name, value)
+        picker.setMinimumWidth(78)
 
-        # Match on the nearest preset, not an exact value, so a container the
-        # 3D handles left at 83 still shows something.
+        # Match on the nearest preset, not an exact value, so a container left
+        # at 83 by an older version still shows something.
         showing = height_name(container.height)
         picker.blockSignals(True)
         picker.setCurrentIndex(max(picker.findText(showing), 0))
@@ -553,14 +601,11 @@ class Inspector(QWidget):
         picker.currentIndexChanged.connect(
             lambda index: self.heightChanged.emit(
                 container, float(picker.itemData(index))))
-        layout.addWidget(picker)
 
-        note = QLabel("Only the 3D room view uses this. The flat floor plan "
-                      "looks the same whatever you pick.")
-        wrapped(note, grow=False)
-        note.setStyleSheet(
-            f"color: {theme.TEXT_FAINT}; font-size: {theme.FONT_SIZE_SM}px;")
-        layout.addWidget(note)
+        # Kept so container_resized() can follow a 3D height drag live, the
+        # same way the two number boxes follow a footprint drag.
+        self._height_picker_box = picker
+        return picker
 
     def _tiers_block(self, layout, container):
         """Add tier / Remove tier, and what the tiers mean.
@@ -600,8 +645,67 @@ class Inspector(QWidget):
 
         layout.addWidget(row)
 
-    def _move_to_tier(self, item, container, quantity, tier):
-        """Ask how many and where to, then move them."""
+    SPLIT = "split"     # the last entry in the tier dropdown
+
+    def _tier_picker(self, item, container, quantity, tier):
+        """Which tier this pile is on, as a dropdown on its own row.
+
+        This used to be a Move button that opened a dialog with a quantity
+        box and a destination list. Moving a whole pile up one shelf is the
+        common case by a mile, and it was four clicks and a window.
+
+        So: the tiers are listed, picking one moves the lot, and the one it
+        is already on is where the box starts. Splitting a pile across two
+        tiers is the rare case and it still needs to ask how many, so it
+        keeps the dialog and sits at the bottom of the list.
+
+        The dropdown scrolls itself past a handful of entries, which is Qt's
+        own behavior and needs nothing from here.
+        """
+        picker = QComboBox()
+        picker.setToolTip("Which tier these are on")
+        # Fixed, narrow, and the entries are bare numbers rather than
+        # "Tier 3". Both of those are about the 300px panel: left to size
+        # itself the dropdown clipped the item's name to "Paint...", and
+        # narrowed with the longer wording it clipped its own number off and
+        # read "Tier", which is worse than either. The row already sits under
+        # a "Tier 3" heading, so the number alone is not ambiguous here.
+        picker.setObjectName("compact")
+        picker.setFixedWidth(64)
+        picker.addItem("Loose", 0)
+        for level in container.tiers():
+            picker.addItem(f"Tier {level}", level)
+
+        picker.blockSignals(True)
+        picker.setCurrentIndex(max(picker.findData(tier), 0))
+        picker.blockSignals(False)
+
+        if quantity > 1:
+            picker.addItem("Split across tiers…", self.SPLIT)
+
+        def chosen(index):
+            destination = picker.itemData(index)
+            if destination == self.SPLIT:
+                # Put the box back first: the split dialog may be cancelled,
+                # and a dropdown left reading "Split across tiers…" is not a
+                # place anything can be.
+                picker.blockSignals(True)
+                picker.setCurrentIndex(max(picker.findData(tier), 0))
+                picker.blockSignals(False)
+                self._split_across_tiers(item, container, quantity, tier)
+                return
+            if destination == tier:
+                return
+            self.profile.move_to_tier(item, container.id, tier, destination,
+                                      quantity)
+            self.dataChanged.emit()
+            self.show_selection(container)
+
+        picker.currentIndexChanged.connect(chosen)
+        return picker
+
+    def _split_across_tiers(self, item, container, quantity, tier):
+        """Ask how many and where to, then move that many."""
         dialog = MoveToTierDialog(self, item, container, quantity, tier)
         if not dialog.exec():
             return
@@ -727,7 +831,6 @@ class Inspector(QWidget):
 
         layout.addSpacing(theme.SPACE_XS)
         self._container_size_block(layout, container)
-        self._height_block(layout, container)
         self._tiers_block(layout, container)
 
         self._tags_block(layout, container, "container")
@@ -768,12 +871,7 @@ class Inspector(QWidget):
 
                 move = None
                 if container.tier_count:
-                    move = button(
-                        "Move", "ghost", size="sm",
-                        tooltip="Move some or all of these to another tier",
-                        on_click=(lambda checked=False, i=item, q=quantity,
-                                  t=tier: self._move_to_tier(
-                                      i, container, q, t)))
+                    move = self._tier_picker(item, container, quantity, tier)
 
                 layout.addWidget(self._mini_row(
                     item.color, item.name, subtitle,

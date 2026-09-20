@@ -342,6 +342,37 @@ def stylesheet():
         color: {TEXT_FAINT};
     }}
 
+    /* Sliders. Only the color picker's brightness uses one, and without a
+       rule here Qt draws a hairline groove with a handle so small it reads
+       as a rendering fault rather than something you can grab. */
+    QSlider::groove:vertical {{
+        width: 6px;
+        border-radius: 3px;
+        background-color: {BG_ACTIVE};
+    }}
+    QSlider::handle:vertical {{
+        height: 14px;
+        margin: 0 -6px;
+        border-radius: 4px;
+        border: 1px solid {BORDER_LIGHT};
+        background-color: {TEXT};
+    }}
+    QSlider::handle:vertical:hover {{
+        border-color: {ACCENT};
+    }}
+    QSlider::groove:horizontal {{
+        height: 6px;
+        border-radius: 3px;
+        background-color: {BG_ACTIVE};
+    }}
+    QSlider::handle:horizontal {{
+        width: 14px;
+        margin: -6px 0;
+        border-radius: 4px;
+        border: 1px solid {BORDER_LIGHT};
+        background-color: {TEXT};
+    }}
+
     /* The way out of a room, floating in the corner of the canvas. Solid and
        outlined rather than ghosted: it sits on top of a drawing, and a
        see-through button over a busy floor plan is invisible at exactly the
@@ -456,6 +487,17 @@ def stylesheet():
     QComboBox:hover {{
         border-color: {BORDER_LIGHT};
     }}
+    /* A dropdown living inside a dense list row. Tighter padding and a
+       narrower arrow, because in a 300px panel the difference between this
+       and the ordinary one is whether the item's name beside it reads
+       "Sandpaper" or "Sandpa...". */
+    QComboBox#compact {{
+        padding: 5px 4px;
+    }}
+    QComboBox#compact::drop-down {{
+        width: 14px;
+    }}
+
     QComboBox::drop-down {{
         border: none;
         width: 22px;

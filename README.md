@@ -160,9 +160,14 @@ polygon like any other, and you can drag its corners about.
 **Resizing.** Select a room and you get square handles around the outside.
 Dragging one stretches the whole room but keeps its shape, so an oval stays an
 oval and an L keeps its notch. Containers get pulled back inside if you shrink
-the room past them. There are W and H boxes in the inspector if you'd rather
+the room past them. There are L and W boxes in the inspector if you'd rather
 type an exact size, and they count along with the handle while you drag, so
 you can watch the numbers rather than guessing and checking.
+
+They say L and W, not W and H, and that is deliberate. A room is a shape on a
+floor. It has a length and a width, and calling the second number a height
+invites you to read it as how tall the room is, which is not a thing this
+program tracks at all. Only containers have a height, and it has its own box.
 
 That live update goes through its own signal rather than the one that triggers
 an autosave. It fires on every mouse move, and dragging a room across the floor
@@ -222,9 +227,16 @@ drag genuinely does mean something else, move the whole room, and a drawer
 quietly coming along for the ride is exactly the accident that focus mode
 exists to prevent.
 
-There are W and H boxes in the inspector either way, and they track a drag the
-same way a room's do. A container is clamped to its room, so you can't stretch
-a drawer out through a wall or shrink one below 20.
+A container's size is one line in the inspector: `L`, `W`, then `H`. The first
+two are boxes you can type in and they track a drag the same way a room's do. A
+container is clamped to its room, so you can't stretch a drawer out through a
+wall or shrink one below 20.
+
+`H` is a dropdown, not a box, because height is not measured the way the
+footprint is. You don't know that a cabinet is 74 units tall, you know it's
+about waist height, so the choices are Low, Medium, Tall and Full height and
+that's the whole vocabulary. It also follows the 3D view live: drag the height
+handle in there and the dropdown changes under your cursor.
 
 Edit shape leaves containers alone. A container is a rectangle and has no
 outline to edit, so that mode is about the room it sits in.
@@ -235,15 +247,25 @@ tier they're on: tier 1 shoes, tier 2 chargers, all still in the one shelf in
 the one room. The Items screen reads `Hallway / Shoe shelf, Tier 2`.
 
 **Moving things between tiers.** Every item row in a tiered container has a
-Move button. It asks how many and which tier, so six pairs of shoes can go four
-on tier 1 and two on tier 3 in two moves. Moving onto a tier that already has
-some adds to it rather than replacing it, and moving to "loose in the
-container" takes something back off its tier.
+small dropdown showing where it is now. Open it, pick a tier, done. Moving onto
+a tier that already has some adds to it rather than replacing it, and "Loose"
+at the top of the list takes something back off its tier.
 
-The quantity is the reason this isn't drag and drop. Dragging a row somewhere
-says *move this*, and it has no way to say *move two of these*, which is the
-thing you actually want on a shelf. It's also a 300px panel that scrolls, so
-dragging to a heading that's scrolled off screen would be a fight.
+That dropdown used to be a Move button that opened a window asking how many and
+which tier, and the window was wrong for the common case. Almost every move is
+all of them to one tier, and paying two clicks and a modal for it was silly.
+Now the ordinary move is one gesture and the window only appears when you need
+it: the last entry, "Split across tiers…", opens the old dialog, and it only
+appears at all when there's more than one of the thing to split.
+
+A shelf with more tiers than fit on screen scrolls the dropdown, which is a
+list doing what lists do. A shelf with more than five tiers is unusual enough
+that it doesn't deserve a different design.
+
+It isn't drag and drop, and that's on purpose. Dragging a row somewhere says
+*move this*, and it has no way to say *move two of these*, which is the thing
+you actually want on a shelf. It's also a 300px panel that scrolls, so dragging
+to a heading that's scrolled off screen would be a fight.
 
 Four decisions worth defending:
 
@@ -262,6 +284,28 @@ that cupboard. You just stopped dividing it up.
 The same item can be on two tiers of one shelf. Shoes on tier 1 and shoes on
 tier 3 are two honest facts, and a placement is keyed by container AND tier, so
 both are recordable.
+
+**Picking a color.** Everything that can be color-coded, profiles, floors,
+rooms, containers and items, uses the same block: a color wheel with hue around
+the rim and saturation toward the middle, a brightness slider beside it, a box
+you can type a hex code into, and twelve preset dots. Drag on the wheel and
+whatever you're coloring follows along live rather than waiting for you to let
+go.
+
+The wheel is there because your kitchen cabinets are a particular green and no
+fixed palette has it. The dots are there because most of the time all you want
+is "a different one from the last", and that's one click where a wheel is a
+drag and a squint. They also keep a profile looking like one profile: the
+presets were picked to read well against the dark canvas, which isn't true of
+everything the wheel can reach.
+
+The whole block is 96 pixels tall, which is the size the rest of the panel can
+afford rather than a number I liked. The inspector is one scrolling column and
+everything in it competes for the same pixels, so this got measured against the
+list of containers underneath it: bigger and a room with five containers starts
+the column scrolling, smaller and the wheel gets fiddly to aim at. Stacking the
+hex box and the dots in the empty space beside the wheel rather than under it
+is what bought most of the room.
 
 **Getting around.** Scroll to zoom. Middle-drag or right-drag to pan. Right
 drag is the one worth knowing: it's the same button that opens the menu, so the
@@ -296,6 +340,29 @@ attempt to move a cabinet made it taller instead. How far it floats is
 `iso.handle_lift`, worked out from the footprint rather than fixed, because a
 lift that looks generous on a small bin lands back inside the top face of a
 wide workbench.
+
+**Dragging a height clicks between the four presets.** It used to scale
+smoothly and you'd end up with a cabinet 43 units tall, which is a number that
+means nothing and doesn't match anything else in the room. Now the box jumps to
+Low, Medium, Tall or Full height as you pass them, and the `H` dropdown in the
+inspector changes with it while you're still holding the mouse down. Dragging
+up past Full height does nothing, which is the honest answer, and there's a
+test for it.
+
+**Right-click the floor in a 3D room** and you get the same kind of menu the
+flat plan has. "Add container here" drops one where you clicked, "Add container
+by dragging" is the old draw-a-footprint gesture, and "Step out of this room"
+is there because the corner button is easy to forget. Right-click a box instead
+and you get add an item, rename, delete.
+
+"Add container here" grays out and says "(outside the room)" when the spot you
+picked isn't in the room, which happens more than you'd expect: a 3D floor is
+drawn as a flat diamond and the bit past the far wall still looks like floor.
+Before it decides, it tries a full-size container, then 60%, then 35%, so a
+click in a narrow corner still gets you something rather than a gray menu
+entry. The menu and the click run the same function to work that out, which
+they didn't at first: the menu tested the full size only, so there were spots
+where the entry was gray and clicking there would have worked fine.
 
 Turn it off and the program is exactly what it was. The 3D view is a second
 widget that takes the canvas's place in a stack; with the toggle off it is
@@ -387,9 +454,14 @@ on the floor, and containers always are.
 **Container heights.** Four presets in the inspector: Low, Medium, Tall, Full
 height. Medium is the default, and every container in a save file written
 before this existed becomes Medium, so an old profile looks like a room the
-first time you open it in 3D rather than a car park. The 3D handle can put a
-container anywhere between the presets, and the dropdown then shows the
-nearest one so it's never blank.
+first time you open it in 3D rather than a car park.
+
+Four names is the whole vocabulary now. The 3D handle used to scale smoothly
+and could leave a container on 43, which reads as a measurement without being
+one, so the drag snaps to the nearest preset as you pass it. A file that
+already holds an in-between height still opens and still draws at that height;
+the dropdown shows the nearest name, so it's never blank. `nearest_height` in
+`models.py` is the one function both of those go through.
 
 The numbers behind those names are deliberately modest: Medium is about the
 height of the drawn wall, and Full height is roughly twice it. The first set
@@ -871,6 +943,62 @@ version rebuilt a whole QGraphicsScene in there. Fine on a five-room floor,
 a quarter of a second on a sixty-room one, which is a window you can watch
 lag behind your mouse. Do the work when the inputs change, keep the picture,
 and let paintEvent copy it.
+
+The color wheel is the same lesson with a different answer. Working out a color
+per pixel across a 96px disc is far too slow to do every frame, so it's done
+once into a `QImage` and kept. `paintEvent` blits the image and draws a small
+ring where you last clicked.
+
+**Darkening a color is exactly painting black over it at the right opacity.**
+The wheel shows hue and saturation; the slider beside it is brightness, and the
+obvious way to show brightness is to redraw the whole disc every time the
+slider moves, which is the expensive thing I just said not to do.
+
+It turns out not to be needed. In HSV, value scales all three channels by the
+same factor, so a pixel at value `v` is literally its full-brightness self
+multiplied by `v`. Compositing black at opacity `1 - v` over a pixel does
+`pixel × v + 0 × (1 - v)`, which is the same multiplication. So the cached
+image never changes and a single black rectangle at the right alpha goes over
+the top. That's not an approximation that looks close enough. It's the same
+arithmetic.
+
+**`QScrollArea.setWidget` destroys the old widget right then.** Not at the end
+of the event, not when Python drops the last reference. Immediately, in C++.
+
+This is fine until the thing asking for the rebuild is inside the panel being
+rebuilt. The tier dropdown does exactly that: you pick a tier, its own
+`currentIndexChanged` handler asks the inspector to redraw the panel, and the
+inspector calls `setWidget`, which frees the combo box whose signal handler is
+halfway through running. The stack unwinds into memory that isn't there any
+more and the whole app disappears without a traceback, which is a miserable
+thing to debug from a Python file.
+
+The fix is two lines and it goes in `show_selection`, not at the call site:
+
+```python
+stale = self._scroll.takeWidget()
+if stale is not None:
+    stale.deleteLater()
+self._scroll.setWidget(body)
+```
+
+`takeWidget` hands the old panel back instead of killing it, and `deleteLater`
+queues the delete for after the current event finishes, by which time the combo
+box's handler has returned. Putting it in `show_selection` means every caller
+gets it, including the next widget I add that does the same thing without my
+noticing.
+
+**A menu you `exec()` in a test will hang forever.** `QMenu.exec` starts its
+own event loop and doesn't come back until something picks an entry, and in a
+headless run nothing ever will. I lost ten minutes to a test that had simply
+stopped, and monkeypatching `QMenu.exec` didn't take because the call happens
+inside Qt.
+
+The answer was to split building the menu from showing it. `menu_for(point)`
+returns a `QMenu` and `contextMenuEvent` is the only thing that calls `exec` on
+it. Tests build the menu, read its entries, and trigger one directly. Worth
+doing anyway: "what's on this menu here" turned out to be the thing worth
+testing, and it's now a question you can ask without opening anything.
 
 ## Changing things
 

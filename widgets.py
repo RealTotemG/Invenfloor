@@ -22,18 +22,22 @@ announces. That is what stops a big app turning into a knot, and it is the
 single most important Qt idea to get comfortable with.
 """
 
+import math
 import re
 
 from PySide6.QtCore import (
-    Property, QEasingCurve, QPoint, QPropertyAnimation, QRect,
+    Property, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect,
     QRectF, QSize, Qt, Signal,
 )
-from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPen
+from PySide6.QtGui import (
+    QBrush, QColor, QConicalGradient, QFontMetricsF, QImage, QPainter,
+    QPen, QRadialGradient,
+)
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QDialog, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLineEdit, QMessageBox, QLayout, QCheckBox,
     QScrollArea, QFrame, QSpinBox, QPlainTextEdit, QComboBox, QSizePolicy,
-    QListWidget, QAbstractItemView, QAbstractButton,
+    QListWidget, QAbstractItemView, QAbstractButton, QSlider,
 )
 
 import theme
@@ -440,58 +444,293 @@ class FlowLayout(QLayout):
 # COLOR PICKER
 # ---------------------------------------------------------------------------
 
-class ColorPicker(QWidget):
-    """A grid of color swatches. The chosen one gets a ring around it.
+# 96 is the size the rest of the panel can afford. The inspector is one
+# scrolling column and everything in it competes for the same pixels, so the
+# wheel was measured against the list of containers below it rather than
+# picked by eye: smaller than this and it gets fiddly to aim at, larger and a
+# room with five containers starts the column scrolling.
+WHEEL_SIZE = 96         # the hue and saturation disc, in pixels
+WHEEL_MARGIN = 3        # room for the marker ring to sit on the rim
 
-    Emits colorChanged(hex_string) whenever the user picks a different one.
+
+class ColorWheel(QWidget):
+    """Hue around the rim, saturation toward the middle. Pick anywhere.
+
+    HOW THE DISC IS DRAWN
+    ---------------------
+    Pixel by pixel into a QImage, once, and then blitted. Working out a color
+    per pixel is far too slow to do inside paintEvent, which runs whenever
+    anything at all redraws, but doing it once per size is nothing.
+
+    Brightness is NOT baked into that image. It is a black rectangle painted
+    over the top at (1 - brightness) opacity, which is not an approximation:
+    in HSV, lowering the value scales all three channels by the same factor,
+    and that is exactly what compositing black does. So the slider is free --
+    no repainting 13,000 pixels while it is being dragged.
     """
 
     colorChanged = Signal(str)
 
-    def __init__(self, color=None, columns=6, size=24, parent=None):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(WHEEL_SIZE, WHEEL_SIZE)
+        self.setCursor(Qt.CrossCursor)
+        self._hue = 0.0          # 0 to 1
+        self._saturation = 0.0   # 0 to 1, from the middle outward
+        self._value = 1.0        # 0 to 1, set by the slider beside it
+        self._disc = None
+
+    # -- what it is showing --------------------------------------------------
+
+    def set_hsv(self, hue, saturation, value):
+        self._hue, self._saturation, self._value = hue, saturation, value
+        self.update()
+
+    def hsv(self):
+        return self._hue, self._saturation, self._value
+
+    # -- drawing --------------------------------------------------------------
+
+    def _build_disc(self):
+        """The hue and saturation wheel at full brightness, as an image."""
+        size = WHEEL_SIZE
+        image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.transparent)
+
+        middle = (size - 1) / 2.0
+        radius = middle - WHEEL_MARGIN
+
+        for y in range(size):
+            for x in range(size):
+                dx = (x - middle) / radius
+                dy = (y - middle) / radius
+                distance = math.hypot(dx, dy)
+                if distance > 1.0:
+                    continue
+                # atan2 of -dy because screen y grows downward and a color
+                # wheel reads anticlockwise from the right, like an angle.
+                hue = (math.degrees(math.atan2(-dy, dx)) % 360.0) / 360.0
+                color = QColor.fromHsvF(hue, min(distance, 1.0), 1.0)
+                # Fade the last pixel of the rim into transparency, or the
+                # edge of the disc is a staircase.
+                if distance > 0.97:
+                    color.setAlphaF(max(0.0, (1.0 - distance) / 0.03))
+                image.setPixelColor(x, y, color)
+
+        return image
+
+    def paintEvent(self, event):
+        if self._disc is None:
+            self._disc = self._build_disc()
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.drawImage(0, 0, self._disc)
+
+        middle = (WHEEL_SIZE - 1) / 2.0
+        radius = middle - WHEEL_MARGIN
+
+        # Brightness, as black over the top. See the note in the class.
+        if self._value < 1.0:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(0, 0, 0,
+                                           int((1.0 - self._value) * 255))))
+            painter.drawEllipse(QRectF(middle - radius, middle - radius,
+                                       radius * 2, radius * 2))
+
+        # The marker. Two rings, dark under light, so it stays visible on a
+        # pale yellow and on a deep blue alike.
+        angle = self._hue * 2 * math.pi
+        spot_x = middle + math.cos(angle) * self._saturation * radius
+        spot_y = middle - math.sin(angle) * self._saturation * radius
+
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(0, 0, 0, 160), 3))
+        painter.drawEllipse(QPointF(spot_x, spot_y), 5.5, 5.5)
+        painter.setPen(QPen(QColor(255, 255, 255), 1.6))
+        painter.drawEllipse(QPointF(spot_x, spot_y), 5.5, 5.5)
+        painter.end()
+
+    # -- the mouse ------------------------------------------------------------
+
+    def _pick(self, position):
+        middle = (WHEEL_SIZE - 1) / 2.0
+        radius = middle - WHEEL_MARGIN
+        dx = (position.x() - middle) / radius
+        dy = (position.y() - middle) / radius
+
+        distance = math.hypot(dx, dy)
+        self._hue = (math.degrees(math.atan2(-dy, dx)) % 360.0) / 360.0
+        # Clamped rather than ignored: dragging off the edge should hold the
+        # most saturated color at that angle, not stop responding.
+        self._saturation = min(distance, 1.0)
+        self.update()
+        self.colorChanged.emit(
+            QColor.fromHsvF(self._hue, self._saturation, self._value).name())
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._pick(event.position())
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self._pick(event.position())
+
+
+class ColorPicker(QWidget):
+    """A color wheel, a brightness slider, a hex box and the house palette.
+
+    Emits colorChanged(hex_string) whenever the color changes, including
+    while the wheel is being dragged, so whatever is being colored follows
+    along live.
+
+    WHY BOTH A WHEEL AND SWATCHES
+    -----------------------------
+    The wheel is there because your kitchen cabinets are a particular green
+    and no fixed palette has it. The swatches are there because most of the
+    time you want "a different one from the last", and picking that off a row
+    is one click where a wheel is a drag and a squint. They also keep a
+    profile looking like one profile: the presets were chosen to read well
+    against the dark canvas, which is not true of every color the wheel can
+    reach.
+    """
+
+    colorChanged = Signal(str)
+
+    def __init__(self, color=None, columns=6, size=18, parent=None):
+        """columns and size shape the swatch grid: how many dots per row, and
+        how big each dot is. Six across puts the twelve presets in two rows,
+        which keeps the whole block no taller than the wheel beside it."""
         super().__init__(parent)
         self._color = color or theme.SWATCHES[0]
-        self._size = size
         self._buttons = {}
 
-        grid = QGridLayout(self)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(theme.SPACE_SM)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(theme.SPACE_SM)
 
+        top = QHBoxLayout()
+        top.setSpacing(theme.SPACE_SM)
+
+        self._wheel = ColorWheel()
+        self._wheel.colorChanged.connect(self._from_wheel)
+        top.addWidget(self._wheel)
+
+        beside = QVBoxLayout()
+        beside.setSpacing(theme.SPACE_SM)
+
+        self._brightness = QSlider(Qt.Vertical)
+        self._brightness.setRange(8, 100)
+        self._brightness.setToolTip("Brightness")
+        self._brightness.valueChanged.connect(self._from_brightness)
+        beside.addWidget(self._brightness, 1, Qt.AlignHCenter)
+
+        top.addLayout(beside)
+
+        # The hex box and the house palette stack up BESIDE the wheel rather
+        # than under it. A wheel is tall and the column next to it was empty,
+        # and the inspector is one scrolling column: every pixel this block
+        # spends is a pixel the list of containers below it does not get.
+        # Put this way, the whole thing is as tall as the wheel and no more.
+        side = QVBoxLayout()
+        side.setSpacing(theme.SPACE_SM)
+
+        self._hex = QLineEdit()
+        self._hex.setMaxLength(7)
+        self._hex.setFixedWidth(90)
+        self._hex.setToolTip("Type a hex color, like #33d6a0")
+        self._hex.editingFinished.connect(self._from_hex)
+        side.addWidget(self._hex)
+
+        swatches = QGridLayout()
+        swatches.setSpacing(theme.SPACE_XS)
+        dot_size = size
         for index, swatch in enumerate(theme.SWATCHES):
             dot = QPushButton()
-            dot.setFixedSize(size, size)
+            dot.setFixedSize(dot_size, dot_size)
             dot.setCursor(Qt.PointingHandCursor)
+            dot.setToolTip(swatch)
             # A lambda with a default argument captures the value NOW rather
             # than looking it up later. Without "s=swatch" every button would
             # end up reporting the last color in the list -- a classic and
             # very confusing Python loop bug.
-            dot.clicked.connect(lambda checked=False, s=swatch: self.set_color(s))
+            dot.clicked.connect(lambda checked=False, s=swatch:
+                                self.set_color(s))
             self._buttons[swatch] = dot
-            grid.addWidget(dot, index // columns, index % columns)
+            swatches.addWidget(dot, index // columns, index % columns)
+        self._dot_size = dot_size
+        side.addLayout(swatches)
+        side.addStretch()
 
-        self._refresh()
+        top.addLayout(side)
+        top.addStretch()
+        outer.addLayout(top)
+
+        self.set_color(self._color, announce=False)
+
+    # -- the color it is on ---------------------------------------------------
 
     def color(self):
         return self._color
 
     def set_color(self, color, announce=True):
+        """Move every control onto this color. The one entry point."""
         self._color = color
+        made = QColor(color)
+        if made.isValid():
+            hue, saturation, value, _ = made.getHsvF()
+            # A gray has no hue at all and getHsvF reports -1 for it. Keeping
+            # the hue the wheel already had means dragging the brightness
+            # slider down to black and back up returns the color you started
+            # from rather than red.
+            if hue < 0:
+                hue = self._wheel.hsv()[0]
+            self._wheel.set_hsv(hue, saturation, value)
+            self._brightness.blockSignals(True)
+            self._brightness.setValue(int(round(value * 100)))
+            self._brightness.blockSignals(False)
+
+        if self._hex.text().lower() != color.lower():
+            self._hex.blockSignals(True)
+            self._hex.setText(color)
+            self._hex.blockSignals(False)
+
         self._refresh()
         if announce:
             self.colorChanged.emit(color)
 
+    # -- where changes come from ----------------------------------------------
+
+    def _from_wheel(self, color):
+        self.set_color(color)
+
+    def _from_brightness(self, level):
+        hue, saturation, _ = self._wheel.hsv()
+        value = level / 100.0
+        self._wheel.set_hsv(hue, saturation, value)
+        self.set_color(QColor.fromHsvF(hue, saturation, value).name())
+
+    def _from_hex(self):
+        """Accept a typed color, or put the old one back if it is nonsense."""
+        typed = self._hex.text().strip()
+        if not typed.startswith("#"):
+            typed = "#" + typed
+        if QColor(typed).isValid() and re.fullmatch(r"#[0-9a-fA-F]{6}", typed):
+            self.set_color(typed.lower())
+        else:
+            self._hex.setText(self._color)
+
     def _refresh(self):
         """Repaint every swatch, ringing whichever one is selected."""
         for swatch, dot in self._buttons.items():
-            selected = (swatch == self._color)
+            selected = (swatch.lower() == self._color.lower())
             border = f"2px solid {theme.TEXT}" if selected else \
                      f"1px solid {theme.BORDER_LIGHT}"
             dot.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {swatch};
                     border: {border};
-                    border-radius: {self._size // 2}px;
+                    border-radius: {self._dot_size // 2}px;
                 }}
                 QPushButton:hover {{
                     border: 2px solid {theme.TEXT_MUTED};

@@ -39,7 +39,8 @@ from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 import iso
 import theme
 from models import (Container, MIN_CONTAINER_SIZE, MIN_HEIGHT, MAX_HEIGHT,
-                    DEFAULT_HEIGHT, fit_in_room, room_contains_rect, short)
+                    DEFAULT_HEIGHT, fit_in_room, nearest_height,
+                    room_contains_rect, short)
 
 # How big a resize handle is on screen, and how close you have to click.
 HANDLE_SIZE = 9
@@ -580,19 +581,105 @@ class RoomView3D(QWidget):
         super().keyPressEvent(event)
 
     def contextMenuEvent(self, event):
-        hit = self.container_at(QPointF(event.pos()))
-        if hit is None:
-            return
+        """Build the right menu for what was clicked, then show it.
 
-        self.select(hit)
+        Building and showing are separate calls on purpose. exec() runs its
+        own event loop until someone picks something, so a test that goes
+        through here never comes back; asking for the menu itself is the only
+        way to check what is on it.
+        """
+        if self.room is None:
+            return
+        self.menu_for(QPointF(event.pos())).exec(event.globalPos())
+
+    def menu_for(self, point):
+        """Which menu belongs at this point: the container's, or the floor's.
+
+        Split out from the event handler so the choice can be checked without
+        showing anything. exec() below runs its own event loop and does not
+        come back until a person clicks, so anything that reaches it is
+        untestable by definition.
+        """
+        hit = self.container_at(point)
+        if hit is not None:
+            self.select(hit)
+            return self.container_menu(hit)
+        return self.floor_menu(self._clamped_floor(point))
+
+    def container_menu(self, container):
         menu = QMenu(self)
         menu.addAction("Add item here",
-                       lambda: self.addItemRequested.emit(hit))
-        menu.addAction("Rename", lambda: self.renameRequested.emit(hit))
+                       lambda: self.addItemRequested.emit(container))
+        menu.addAction("Rename",
+                       lambda: self.renameRequested.emit(container))
         menu.addSeparator()
         menu.addAction("Delete container",
-                       lambda: self.deleteRequested.emit(hit))
-        menu.exec(event.globalPos())
+                       lambda: self.deleteRequested.emit(container))
+        return menu
+
+    def floor_menu(self, where):
+        """Right-clicking bare floor: make a container right there.
+
+        The flat canvas has had this since early on and the 3D view did not,
+        which left the Add container tool in the toolbar as the only way in.
+        Dragging out a footprint is fine when you care about the size and
+        fussy when you do not, and "put a box here" is most of the time.
+        """
+        menu = QMenu(self)
+
+        action = menu.addAction("Add container here")
+        action.triggered.connect(lambda: self._add_container_at(where))
+        if self._box_for(where) is None:
+            # Right-clicking the wall, or the notch of an L-shaped room. The
+            # entry stays visible and grayed rather than vanishing, so the
+            # menu always looks the same and it is obvious why nothing
+            # happened.
+            action.setEnabled(False)
+            action.setText("Add container here  (outside the room)")
+
+        menu.addSeparator()
+        menu.addAction("Add container by dragging",
+                       lambda: self.set_adding(True))
+        menu.addAction("Step out of this room", self.exitRequested.emit)
+        return menu
+
+    def _box_for(self, where):
+        """The container a right-click here would make, or None if none fits.
+
+        Tries smaller boxes before giving up, for the same reason the flat
+        canvas does: you named a spot, and a smaller container there beats
+        none at all when the default size would overhang a wall.
+
+        The menu and the click both ask THIS, rather than each working it out.
+        The first version had the menu test the default size and the click try
+        the smaller ones, so an entry could be grayed out over a spot where
+        clicking it would have worked perfectly well.
+        """
+        for shrink in (1.0, 0.6, 0.35):
+            width = max(MIN_CONTAINER_SIZE, ADD_DEFAULT_SIZE[0] * shrink)
+            depth = max(MIN_CONTAINER_SIZE, ADD_DEFAULT_SIZE[1] * shrink)
+            box = fit_in_room(self.room, where.x() - width / 2,
+                              where.y() - depth / 2, width, depth)
+            if room_contains_rect(self.room, *box):
+                return box
+        return None
+
+    def _add_container_at(self, where):
+        """Drop a container centered on a point, the way the flat canvas does."""
+        box = self._box_for(where)
+        if box is None:
+            return
+        x, y, width, depth = box
+
+        existing = len(self.room.containers)
+        container = Container(
+            name=f"Container {existing + 1}",
+            color=theme.SWATCHES[(existing + 2) % len(theme.SWATCHES)],
+            x=x, y=y, w=width, h=depth, height=DEFAULT_HEIGHT,
+        )
+        self.room.containers.append(container)
+        self.select(container)
+        self.dataChanged.emit()
 
     # -- the drags themselves -------------------------------------------------
 
@@ -635,9 +722,16 @@ class RoomView3D(QWidget):
         if self._grab_handle == "top":
             # Height only. On screen, up is pure -y, so the vertical distance
             # the mouse travelled IS the height change once zoom is undone.
+            #
+            # And then it CLICKS TO THE NEAREST PRESET rather than landing
+            # wherever the mouse stopped. The inspector only ever offered Low,
+            # Medium, Tall and Full height, so a free drag could leave a
+            # container at 41, which is not a thing the dropdown can say. It
+            # showed the nearest name and quietly disagreed with the box on
+            # screen. Now the two cannot disagree, because there is nothing in
+            # between to land on.
             lifted = (self._press_screen.y() - point.y()) / self._zoom
-            height = min(max(start_height + lifted, MIN_HEIGHT), MAX_HEIGHT)
-            self.selected.height = round(height)
+            self.selected.height = nearest_height(start_height + lifted)
             self.containerResized.emit(self.selected)
             self.update()
             return

@@ -425,11 +425,31 @@ MIN_HEIGHT = 6.0
 MAX_HEIGHT = 120.0
 
 
+def nearest_height(height):
+    """The preset nearest to a number. What the 3D height handle snaps to.
+
+    Dragging the handle steps between the presets rather than scaling freely,
+    because the inspector only ever offered the four names. A free drag could
+    leave a container at 41, which the dropdown had no way to say: it showed
+    the nearest name and quietly disagreed with the box on screen. Snapping
+    means there is nothing in between for the two to disagree about.
+
+    Anything already at an in-between height, from an older version, keeps it
+    until someone drags it. Nothing is rewritten on the way in.
+    """
+    try:
+        height = float(height)
+    except (TypeError, ValueError):
+        return DEFAULT_HEIGHT
+    return min(CONTAINER_HEIGHTS, key=lambda pair: abs(pair[1] - height))[1]
+
+
 def height_name(height):
     """The closest preset name for a height, for showing in the inspector.
 
-    Closest rather than exact, because the 3D resize handles can leave a
-    container at 83, and "Tall" is a more useful thing to read than nothing.
+    Closest rather than exact, because a save file written before the handle
+    snapped can hold a container at 83, and "Tall" is a more useful thing to
+    read than nothing.
     """
     closest = min(CONTAINER_HEIGHTS, key=lambda pair: abs(pair[1] - height))
     return closest[0]
