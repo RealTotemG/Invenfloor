@@ -13,7 +13,12 @@ env/
 # PyInstaller output. Rebuildable, and often hundreds of megabytes.
 build/
 dist/
-*.spec
+release/
+
+# Invenfloor.spec is NOT ignored, and that is deliberate. It used to be, back
+# when the spec was whatever PyInstaller generated on somebody's machine. It
+# is now the build recipe: build.bat and the GitHub Actions workflow both run
+# it, which is what makes a build here and a build on GitHub the same build.
 
 # Editor and OS clutter.
 .vscode/

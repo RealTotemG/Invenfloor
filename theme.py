@@ -272,6 +272,26 @@ def stylesheet():
         font-size: {FONT_SIZE_SM}px;
     }}
 
+    /* Something happened that you should know about but that does not need
+       a dialog in your way. Used when a save file had to be recovered on
+       load: worth telling you, not worth a button to dismiss it, and gone
+       by itself the next time everything opens cleanly. The thick left edge
+       is what makes it read as a notice rather than as a paragraph. */
+    #notice {{
+        background-color: {BG_CARD};
+        color: {TEXT};
+        border: 1px solid {BORDER};
+        border-left: 3px solid {WARNING};
+        border-radius: {RADIUS_MD}px;
+        padding: {SPACE_MD}px {SPACE_MD}px;
+        /* The gap above belongs to the notice rather than to the layout
+           around it. A hidden widget takes no space, margin included, so on
+           the ordinary day where nothing was recovered the screen is spaced
+           exactly as it was before this existed. */
+        margin-top: {SPACE_MD}px;
+        font-size: {FONT_SIZE_SM}px;
+    }}
+
     /* ---- buttons ----------------------------------------------------- */
     QPushButton {{
         background-color: {BG_CARD};

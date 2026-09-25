@@ -79,7 +79,7 @@ place. A container is a thing you open.
 |---|---|
 | `theme.py` | Every color, size and font in the app. Start here to restyle. |
 | `models.py` | What a profile, floor, room, container, item and tag are |
-| `storage.py` | Loading and saving. One JSON file per profile. |
+| `storage.py` | Loading and saving. One JSON file per profile, plus the backups and the recovery path. |
 | `widgets.py` | Shared UI pieces: color picker, tag chips, dialogs |
 | `profile_screen.py` | The launcher: the profile list and its floor plan preview |
 | `workspace.py` | The sidebar shell, the autosave timer, undo, keyboard shortcuts |
@@ -726,6 +726,58 @@ Your data sits in a `data` folder next to the code, one JSON file per profile.
 You can open one in a text editor and read it, which was genuinely useful while
 I was building this.
 
+**What survives a bad day.** Undo only lasts as long as the program is open,
+which is what I wanted, but it leaves a gap: close the app and yesterday's
+mistake is permanent. Three things fill it, and they answer three different
+questions.
+
+*A save can't be caught half-finished.* Every write goes to a temporary file,
+gets flushed all the way down to the disk, and is then renamed over the real
+one. A rename is atomic, so there's no instant where the real file holds half
+a profile. A crash leaves you either the old file or the new one.
+
+The flush is the part worth knowing about, because atomic and durable are not
+the same word. Without it the rename can land while the contents are still
+sitting in a buffer, and a power cut then leaves you a perfectly named,
+perfectly empty save file. Two lines, and they're the two that matter.
+
+*The previous save is kept as a `.bak`.* That's the "I did something stupid
+and closed the window" file, and it's free, because it's a rename of a file
+about to be overwritten rather than a copy.
+
+*The state at the start of each of the last ten days you used the app is kept
+in `data/backups/`.* That's the "I deleted a floor last week" file. There's a
+Backups button in the top right of the launcher that opens the folder, because
+on a packaged build it lives somewhere under AppData that nobody would ever go
+looking, and a backup nobody can find isn't one. Restoring is copying a file
+over the broken one.
+
+Snapshots are per DAY rather than per save on purpose. Saves are debounced at
+half a second, so a ten-deep per-save history would cover about five seconds
+and would cheerfully fill itself with ten copies of the very mistake you're
+trying to walk back. A day is the unit that matches how people actually notice
+something is missing.
+
+**When a save file won't open.** It used to be skipped with a message printed
+to a terminal nobody is watching, which means the profile just quietly wasn't
+in the launcher any more. Now it falls back: the previous save first, then the
+dated snapshots newest first, and the first one that reads properly is put back
+in place. A notice at the top of the launcher says which profile it was and
+where the data came from, so "restored from the backup from the 14th" tells you
+how much work to expect to be missing.
+
+The broken file is never deleted. It gets renamed to `.broken-<date>` and left
+there, partly because someone who knows JSON can often pick the contents back
+out of it, and partly for a reason that took me a moment to see: if the
+unreadable file stayed where it was, the next ordinary save would rename it
+over `.bak` and destroy the very backup it had just been rescued from. Moving
+it aside breaks that chain. That's the one case in the whole feature I'd call
+load bearing, and it has its own section in the test suite.
+
+Deleting a profile takes its file and its `.bak` but deliberately leaves the
+dated snapshots. Deleting the wrong profile is exactly the accident this
+exists for.
+
 ## Things I worked out along the way
 
 Mostly Qt, and mostly the kind of thing that isn't obvious until it bites you.
@@ -988,6 +1040,28 @@ box's handler has returned. Putting it in `show_selection` means every caller
 gets it, including the next widget I add that does the same thing without my
 noticing.
 
+**A parser forgiving enough to never fail can never tell you it failed.**
+`Profile.from_dict` reads every field with `.get(key, default)`, which is
+deliberate and good: it's why adding a field doesn't break an old save file.
+
+Follow it to the end, though, and hand it `{"hello": "world"}`. It doesn't
+raise. It returns a profile named "Untitled" with a freshly generated id and
+no floors, because every field it wanted was missing and every field had a
+default. Ask it to read a grocery list and it gives you an empty inventory.
+
+I found this by writing the test for it rather than by it happening, and the
+consequence is worse than the oddity. A file that loads never triggers
+recovery. So a garbled save would quietly replace a real profile in the
+launcher with a blank, while a perfectly good backup sat unopened next to it.
+
+The fix isn't to make `from_dict` stricter, because its forgiveness is doing
+a real job. It's to ask a different question one step earlier, on the raw
+dictionary, before `from_dict` gets to paper over anything: did this file
+actually carry an id and a floors list, or am I looking at defaults? Two
+lines in `storage._looks_like_a_profile`, and the general shape is worth
+remembering. When a function is lenient on purpose, the check for "is this
+input even the right kind of thing" belongs in front of it, not behind it.
+
 **A menu you `exec()` in a test will hang forever.** `QMenu.exec` starts its
 own event loop and doesn't come back until something picks an entry, and in a
 headless run nothing ever will. I lost ten minutes to a test that had simply
@@ -1017,21 +1091,73 @@ dataclass, `to_dict` and `from_dict`. Then show it wherever it belongs in
 `inspector.py`. Old save files keep working because `from_dict` uses `.get()`
 with a default for every field.
 
-## Making it an .exe
+## Building it
 
-`storage.py` already handles the bit that's easy to get wrong. When the app is
-packaged it saves to AppData instead of next to the code, because a one-file
-PyInstaller build unpacks itself into a temp folder that Windows deletes on
-exit, which would take your whole inventory with it.
+Double-click `build.bat`. That's the whole thing on Windows: it redraws the
+icon, builds through `Invenfloor.spec`, and leaves you two things.
 
 ```
-pip install pyinstaller
-pyinstaller --onedir --windowed --name "Invenfloor" main.py
+dist\Invenfloor\Invenfloor.exe      run it
+release\Invenfloor-windows.zip      send it
 ```
 
-`--windowed` stops a console window opening behind the app. `--onedir` gives
-you a folder rather than a single file, which starts faster and gets flagged by
-antivirus far less often than `--onefile`.
+First time only, `pip install -r requirements.txt`. The script installs
+PyInstaller and Pillow itself if they're missing.
+
+**Or don't build it at all.** Push a version tag and GitHub builds it for you:
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` picks that up, builds on a Windows runner,
+checks an exe actually came out, and attaches the zip to a GitHub Release. You
+get a download link and your own machine never needs PyInstaller on it. This is
+free because the repo is public: GitHub doesn't charge for Actions on public
+repos using standard runners, Windows included, with no monthly minute cap. If
+this repo ever goes private, check that before relying on it.
+
+**The build config is a file, not a command.** `Invenfloor.spec` is committed,
+and both `build.bat` and the workflow run it, so a build from your machine and
+a build from GitHub are the same build. Every decision in it is a comment
+explaining itself. Three worth knowing:
+
+`console=False`, or a black terminal window opens behind the app on every
+launch and sits there, which looks broken to anyone who didn't write it.
+
+UPX compression is off, and that's not about size. A compressed executable
+looks exactly like the packing real malware uses to hide itself, so turning it
+on measurably increases how often Defender flags the build. An unsigned
+executable has enough of that problem already.
+
+And the Qt modules get trimmed. The app imports three: QtCore, QtGui,
+QtWidgets. PySide6 ships around sixty, including a whole browser engine and a
+3D renderer. The spec works the exclude list out from the installed PySide6
+rather than listing it by hand, so a PySide6 update that adds modules doesn't
+quietly start shipping them. It still comes to around 160MB, most of which is
+Qt itself, and the spec says where to pull if that ever matters.
+
+**Where the saves go.** Not into the app folder. `storage.data_folder()`
+notices `sys.frozen` and switches to `%APPDATA%\InventoryApp\data`, so
+rebuilding, updating or deleting the app can't touch your inventory. This
+matters more than it sounds: a folder under Program Files isn't writable, and a
+one-file build's own folder is deleted on exit. Either would lose the lot,
+silently. That branch never runs while you're developing, so it has its own
+tests.
+
+**"Windows protected your PC."** You'll see this, and so will anyone you send
+the build to. SmartScreen reacts to unsigned programs, not to anything wrong
+with this one, and every PyInstaller build has the same problem. Click **More
+info**, then **Run anyway**. The only real fix is a code signing certificate at
+a few hundred dollars a year, which isn't worth it for a personal project. The
+release notes on GitHub say all this so you don't have to explain it each time.
+
+**The icon** is drawn by `make_icon.py`, not committed as a mystery binary.
+It's an isometric box rendered through `iso.draw_box`, the same function the 3D
+room view uses, so it can't drift away from what the app actually looks like.
+Each size is drawn at its own resolution rather than scaled down from one big
+one, because a 16 pixel icon made by shrinking a 256 pixel one is mud.
 
 ## Ideas for later
 

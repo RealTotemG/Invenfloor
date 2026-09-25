@@ -38,8 +38,8 @@ room that looks one way on the canvas looks that way here.
 
 from datetime import datetime
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtCore import QRectF, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel,
     QScrollArea, QMenu, QSizePolicy,
@@ -577,6 +577,16 @@ class ProfileScreen(QWidget):
         outer.setSpacing(0)
 
         outer.addLayout(self._build_header())
+
+        # Sits between the header and the cards, and is hidden unless a save
+        # file actually had to be rescued. A profile quietly reappearing with
+        # last week's contents and nobody saying so is the failure worth
+        # avoiding here: you would carry on and not know what you had lost.
+        self._notice = label("", "notice")
+        wrapped(self._notice)
+        self._notice.hide()
+        outer.addWidget(self._notice)
+
         outer.addSpacing(theme.SPACE_XL)
 
         self._split = QHBoxLayout()
@@ -640,6 +650,16 @@ class ProfileScreen(QWidget):
         text.addWidget(self._subtitle)
         row.addLayout(text, 1)
 
+        # Backups are worth nothing if nobody can find them, and on a packaged
+        # build they live somewhere under AppData that no one would ever go
+        # looking. One button is the whole difference between a safety net and
+        # a folder of files that exists in theory.
+        self._backups_button = button("Backups", "ghost", self._open_backups)
+        self._backups_button.setToolTip(
+            "Open the folder holding the last ten days of saves")
+        self._backups_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row.addWidget(self._backups_button, 0, Qt.AlignTop)
+
         # A real button up here as well as the dashed card below, because the
         # card moves: with nine profiles it is off at the bottom of the grid,
         # and this one never is.
@@ -648,6 +668,17 @@ class ProfileScreen(QWidget):
         row.addWidget(self._new_button, 0, Qt.AlignTop)
 
         return row
+
+    def _open_backups(self):
+        """Show the backups folder in the system file manager.
+
+        QDesktopServices is the portable way to say "open this the way the
+        computer would": Explorer on Windows, Finder on a Mac, whatever is
+        configured on Linux. Doing it by hand would mean three branches and
+        a subprocess call on each.
+        """
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(storage.backups_folder()))
 
     def _subtitle_text(self):
         """A one-line census of everything, across all profiles."""
@@ -669,8 +700,34 @@ class ProfileScreen(QWidget):
         updating one card, but it is far harder to get wrong -- the screen can
         never drift out of step with what is on disk.
         """
-        self.profiles = storage.load_profiles()
+        self.profiles, recoveries = storage.load_profiles_and_recoveries()
+        self._show_recoveries(recoveries)
         self._rebuild_list()
+
+    def _show_recoveries(self, recoveries):
+        """Say out loud that a save file was unreadable and what we did.
+
+        Worth being specific rather than reassuring. "Restored from the
+        backup from 2026-09-14" tells you how much work to expect to be
+        missing; "recovered successfully" tells you nothing and invites you
+        to assume everything is fine.
+        """
+        if not recoveries:
+            self._notice.hide()
+            return
+
+        lines = []
+        for recovery in recoveries:
+            lines.append(f"{short(recovery.profile_name, 40)} could not be "
+                         f"read from its save file, so it was restored from "
+                         f"{recovery.came_from}. Anything changed after that "
+                         f"point is gone.")
+        lines.append("The unreadable file was kept, not deleted. Press "
+                     "Backups to see the folder.")
+
+        self._notice.setText(" ".join(lines) if len(lines) == 2
+                             else "\n\n".join(lines))
+        self._notice.show()
 
     def _rebuild_list(self):
         while self._list.count():
