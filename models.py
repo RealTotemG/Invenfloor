@@ -441,6 +441,10 @@ def nearest_height(height):
         height = float(height)
     except (TypeError, ValueError):
         return DEFAULT_HEIGHT
+    if math.isnan(height):
+        # Every comparison against nan is False, so min() would quietly hand
+        # back whichever preset happens to be first in the list.
+        return DEFAULT_HEIGHT
     return min(CONTAINER_HEIGHTS, key=lambda pair: abs(pair[1] - height))[1]
 
 
@@ -519,10 +523,20 @@ class Container:
 
 
 def clamp_height(value):
-    """Keep a container's height sane, whatever set it."""
+    """Keep a container's height sane, whatever set it.
+
+    Not-a-number is treated as unreadable, the same as None or "oops", and
+    that matters more than it looks. A nan reaching a container writes
+    `"height": NaN` into the save file, which Python's json module accepts
+    as an extension of the format and every other JSON reader in the world
+    rejects. The file loads here and nowhere else, which is the worst kind
+    of broken: invisible until something else tries to read it.
+    """
     try:
         height = float(value)
     except (TypeError, ValueError):
+        return DEFAULT_HEIGHT
+    if math.isnan(height):
         return DEFAULT_HEIGHT
     return min(max(height, MIN_HEIGHT), MAX_HEIGHT)
 

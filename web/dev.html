@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invenfloor web: workbench</title>
+
+<!--
+  A workbench, not the app. There is no app yet.
+
+  Two jobs. It proves model.js works in a real browser rather than only in
+  node, which is not the same thing and is worth knowing before anything is
+  built on top of it. And it reads a save file from the desktop app, which
+  is the claim that matters most: the same file, both programs.
+
+  THIS WILL NOT WORK IF YOU DOUBLE-CLICK IT.
+  ------------------------------------------
+  Opening it from Explorer gives the browser a file:// address, and browsers
+  refuse to load ES modules over file:// for security reasons. The error in
+  the console says "CORS policy" and has nothing to do with your code.
+
+  Serve it instead. In VS Code, install the Live Server extension, then
+  right-click this file and choose "Open with Live Server".
+-->
+
+<style>
+:root {
+  color-scheme: dark;
+  --ink: #0d0f14; --panel: #161a22; --card: #1b2029;
+  --line: #262c3a; --text: #e8ebf2; --dim: #98a1b5; --faint: #5d677d;
+  --accent: #4f7cff; --good: #33d6a0; --bad: #f2555a; --warn: #f0a726;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 32px 24px 64px;
+  background: var(--ink); color: var(--text);
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 860px; margin: 0 auto; }
+h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -.02em; }
+h2 { font-size: 16px; margin: 36px 0 12px; letter-spacing: -.01em; }
+.sub { color: var(--dim); margin: 0 0 8px; }
+.note { color: var(--faint); font-size: 13.5px; }
+code, .mono { font-family: var(--mono); font-size: 13px; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 16px 18px; margin-top: 12px;
+}
+.tally { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+.tally.pass { color: var(--good); }
+.tally.fail { color: var(--bad); }
+
+ul.checks { list-style: none; margin: 0; padding: 0; }
+ul.checks li {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 5px 0; border-top: 1px solid var(--line); font-size: 14px;
+}
+ul.checks li:first-child { border-top: 0; }
+.mark { font-family: var(--mono); font-weight: 700; flex: none; width: 3.2em; }
+.mark.ok { color: var(--good); }
+.mark.no { color: var(--bad); }
+.why { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+
+input[type=file] { font: inherit; font-size: 13px; color: var(--dim); }
+button {
+  font: inherit; font-size: 14px; font-weight: 600;
+  background: var(--accent); color: #fff; border: 0;
+  border-radius: 7px; padding: 8px 16px; cursor: pointer;
+}
+button.ghost { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th, td { text-align: left; padding: 6px 10px 6px 0; border-top: 1px solid var(--line); }
+th { color: var(--faint); font-weight: 500; font-size: 12px; text-transform: uppercase;
+     letter-spacing: .08em; border-top: 0; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+          margin-right: 7px; vertical-align: baseline; }
+.todo li { color: var(--dim); margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Invenfloor web: workbench</h1>
+  <p class="sub">Not the app. A page to check the model works in a browser,
+     and to throw a real save file at it.</p>
+
+  <h2>1. Does model.js run here?</h2>
+  <p class="note">Node already says yes. A browser is a different runtime, and
+     finding out now beats finding out after three screens are built on it.</p>
+  <div class="panel">
+    <p class="tally" id="tally">running…</p>
+    <ul class="checks" id="checks"></ul>
+  </div>
+
+  <h2>2. Open a save file from the desktop app</h2>
+  <p class="note">
+    Your profiles live in <code>C:\Invenfloor\data\</code> while you run from
+    source, or <code>%APPDATA%\InventoryApp\data\</code> once it is packaged.
+    Pick any <code>.json</code> in there. Nothing is uploaded anywhere; the
+    file is read in this page and thrown away when you close the tab.
+  </p>
+  <div class="panel">
+    <input type="file" id="pick" accept=".json,application/json">
+    <button class="ghost" id="sample" style="margin-left:8px">Or use a made-up one</button>
+    <div id="loaded" style="margin-top:14px"></div>
+  </div>
+
+  <h2>3. What is not built yet</h2>
+  <ul class="todo">
+    <li><b>Storage.</b> Nothing is saved. Reload and it is gone.</li>
+    <li><b>The floor plan canvas.</b> The biggest remaining piece.</li>
+    <li><b>The room view.</b> Mostly exists, as the demo on the portfolio
+        site. It needs to read this model instead of its own flattened one.</li>
+    <li><b>The items screen.</b></li>
+  </ul>
+</div>
+
+<script type="module">
+import * as M from "./model.js";
+
+// ---------------------------------------------------------------------------
+// 1. Checks
+// ---------------------------------------------------------------------------
+const results = [];
+const check = (label, ok, why = "") => results.push({ label, ok, why });
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+try {
+  // ids and names
+  const ids = new Set(Array.from({ length: 2000 }, () => M.newId()));
+  check("newId gives 8 hex characters, no repeats in 2000",
+        ids.size === 2000 && [...ids].every(i => /^[0-9a-f]{8}$/.test(i)),
+        `${ids.size} distinct`);
+  check("cleanName collapses whitespace and caps length",
+        M.cleanName("  a   b  ") === "a b" && M.cleanName("x".repeat(60)).length === 40);
+  check("short() counts the ellipsis inside the limit",
+        M.short("Upstairs hallway closet", 10) === "Upstairs\u2026"
+        && M.short("Upstairs hallway closet", 10).length === 9,
+        JSON.stringify(M.short("Upstairs hallway closet", 10)));
+  check("copyName walks past names already taken",
+        M.copyName("Kitchen", ["kitchen copy"]) === "Kitchen copy 2");
+
+  // heights
+  check("nearestHeight snaps to a preset", M.nearestHeight(41) === 50);
+  check("heightName reads back the name", M.heightName(83) === "Full height");
+  check("clampHeight refuses nonsense", M.clampHeight("oops") === 30
+        && M.clampHeight("nan") === 30 && M.clampHeight(999) === 120);
+
+  // geometry, on the L that caused the trouble
+  const L = { points: M.lShapePoints(400, 300) };
+  check("a container in the room fits", M.roomContainsRect(L, 20, 20, 100, 80));
+  check("a container in the notch does not",
+        !M.roomContainsRect(L, 260, 20, 100, 80));
+  check("a container flush into a corner still fits",
+        M.roomContainsRect(L, 0, 0, 100, 80));
+  check("point on the outline counts as inside",
+        M.pointInPolygon(L.points, 0, 0) && M.pointInPolygon(L.points, 200, 0));
+
+  // the fireplace
+  const divot = { points: [[0,0],[400,0],[400,300],[230,300],
+                           [230,250],[170,250],[170,300],[0,300]] };
+  check("a container laid over a small divot is refused",
+        !M.roomContainsRect(divot, 160, 240, 80, 70));
+  check("and one laid exactly on it is refused too",
+        !M.roomContainsRect(divot, 170, 250, 60, 50));
+
+  // sliding along a wall
+  const moved = M.fitInRoom(L, 300, 20, 100, 80, [20, 20, 100, 80]);
+  check("pushed into the notch, it slides instead of jumping",
+        M.roomContainsRect(L, moved[0], moved[1], moved[2], moved[3]),
+        `landed at ${moved[0]}, ${moved[1]}`);
+
+  // shapes
+  check("a circle preset closes on itself",
+        M.circlePoints(200, 200).length === 20
+        && near(M.circlePoints(200, 200)[0][0], 200));
+  check("bounds of an L cover the whole thing",
+        JSON.stringify(M.boundsOf(L)) === JSON.stringify([0, 0, 400, 300]));
+
+  // the save format
+  const raw = { id: "p1", name: "Old file", schema: 1, floors: [{ id: "f1",
+    rooms: [{ id: "r1", points: M.rectanglePoints(400, 300),
+              containers: [{ id: "c1", height: 60 }] }] }] };
+  const loaded = M.Profile.fromDict(structuredClone(raw));
+  check("a version 1 file gets its heights halved on the way in",
+        loaded.floors[0].rooms[0].containers[0].height === 30,
+        `height came out ${loaded.floors[0].rooms[0].containers[0].height}`);
+  // Loading migrates in place, so the profile is already current by the
+  // time it exists. There is no moment where it is a loaded-but-old thing.
+  check("and it is current by the time it has loaded",
+        loaded.schema === M.SCHEMA && loaded.toDict().schema === M.SCHEMA,
+        `schema came out ${loaded.schema}`);
+
+  const trip = M.Profile.fromDict(structuredClone(loaded.toDict())).toDict();
+  check("a profile survives a round trip unchanged",
+        JSON.stringify(trip) === JSON.stringify(loaded.toDict()));
+
+  const item = M.Item.fromDict({ id: "i1", name: "Old", container_id: "cX", quantity: 7 });
+  check("an item saved in the old single-container format still reads",
+        item.placements.length === 1 && item.totalQuantity() === 7);
+} catch (error) {
+  check("model.js loaded and ran", false, String(error));
+}
+
+const passed = results.filter(r => r.ok).length;
+const tally = document.getElementById("tally");
+tally.textContent = passed === results.length
+  ? `all ${results.length} checks passed`
+  : `${results.length - passed} of ${results.length} FAILED`;
+tally.className = "tally " + (passed === results.length ? "pass" : "fail");
+
+document.getElementById("checks").innerHTML = results.map(r =>
+  `<li><span class="mark ${r.ok ? "ok" : "no"}">${r.ok ? "ok" : "FAIL"}</span>`
+  + `<span>${r.label}</span>`
+  + (r.why && !r.ok ? `<span class="why">${r.why}</span>` : "")
+  + `</li>`).join("");
+
+// ---------------------------------------------------------------------------
+// 2. Reading a real save file
+// ---------------------------------------------------------------------------
+const where = document.getElementById("loaded");
+const escape = text => String(text).replace(/[<>&]/g,
+  c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+
+function describe(profile, source) {
+  const rooms = [...profile.allRooms()];
+  const containers = [...profile.allContainers()];
+  const items = profile.items.length;
+  const placed = profile.items.filter(i => !i.isUnfiled()).length;
+
+  // The claim worth testing: what goes out is what came in.
+  const again = M.Profile.fromDict(structuredClone(profile.toDict())).toDict();
+  const stable = JSON.stringify(again) === JSON.stringify(profile.toDict());
+
+  where.innerHTML = `
+    <p class="tally ${stable ? "pass" : "fail"}">
+      ${escape(source)} read ${stable ? "and survives a round trip" : "BUT CHANGES ON A ROUND TRIP"}
+    </p>
+    <table>
+      <tr><th>Profile</th><th>Floors</th><th>Rooms</th><th>Containers</th>
+          <th>Items</th><th>Filed</th><th>Schema</th></tr>
+      <tr>
+        <td><span class="swatch" style="background:${escape(profile.color)}"></span>
+            ${escape(M.short(profile.name, 28))}</td>
+        <td class="num">${profile.floors.length}</td>
+        <td class="num">${rooms.length}</td>
+        <td class="num">${containers.length}</td>
+        <td class="num">${items}</td>
+        <td class="num">${placed}</td>
+        <td class="num">${profile.schema}</td>
+      </tr>
+    </table>
+    ${rooms.length ? `<table style="margin-top:14px">
+      <tr><th>Floor</th><th>Room</th><th>Corners</th><th>Size</th><th>Containers</th></tr>
+      ${rooms.slice(0, 12).map(([floor, room]) => {
+        const [, , w, h] = room.bounds();
+        return `<tr>
+          <td>${escape(M.short(floor.name, 18))}</td>
+          <td><span class="swatch" style="background:${escape(room.color)}"></span>
+              ${escape(M.short(room.name, 20))}</td>
+          <td class="num">${room.points.length}</td>
+          <td class="num">${Math.round(w)} x ${Math.round(h)}</td>
+          <td class="num">${room.containers.length}</td>
+        </tr>`;
+      }).join("")}
+    </table>` : ""}
+    ${rooms.length > 12 ? `<p class="note">and ${rooms.length - 12} more rooms</p>` : ""}
+  `;
+}
+
+document.getElementById("pick").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    describe(M.Profile.fromDict(JSON.parse(await file.text())), file.name);
+  } catch (error) {
+    where.innerHTML = `<p class="tally fail">Could not read ${escape(file.name)}</p>`
+      + `<p class="why">${escape(error)}</p>`;
+  }
+});
+
+document.getElementById("sample").addEventListener("click", () => {
+  const profile = new M.Profile({ name: "Made up", color: "#33d6a0" });
+  const floor = new M.Floor({ name: "Ground Floor" });
+  for (const [name, points, color] of [
+    ["Garage", M.lShapePoints(400, 300), "#33d6a0"],
+    ["Kitchen", M.rectanglePoints(320, 260), "#5b85ff"],
+    ["Shed", M.circlePoints(220, 220), "#f0a726"],
+  ]) {
+    const room = new M.Room({ name, points, color, x: 0, y: 0 });
+    room.containers = [new M.Container({ name: "Shelving", x: 20, y: 20,
+                                         w: 90, h: 50, tierCount: 3 })];
+    floor.rooms.push(room);
+  }
+  profile.floors = [floor];
+  profile.items = [new M.Item({ name: "Sockets",
+    placements: [new M.Placement(floor.rooms[0].containers[0].id, 3, 1)] })];
+
+  // Through fromDict once before describing it, which is what opening a file
+  // does. Containers put somewhere they do not fit get pulled back inside on
+  // the way in, so a profile built by hand is not stable until it has been
+  // loaded once, and comparing before that measures the repair rather than
+  // the round trip.
+  describe(M.Profile.fromDict(profile.toDict()), "A made-up profile");
+});
+</script>
+</body>
+</html>
