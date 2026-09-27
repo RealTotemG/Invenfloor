@@ -3,13 +3,15 @@
 The same app, running anywhere. This folder is the beginning of it.
 
 Nothing here draws anything yet. What exists is the part underneath: the
-records, the save format, and the geometry, ported from `models.py` and
-checked against it case by case.
+records, the save format and the geometry, ported from `models.py` and checked
+against it case by case, and the saving, which keeps the same backups and the
+same rescues as the desktop app.
 
 ## Running it
 
-Open `dev.html` and you get a page that checks the model works in a browser
-and reads a save file from the desktop app.
+Open `dev.html` and you get a page that checks the model works in a browser,
+reads a save file from the desktop app, checks the saving, and lets you keep a
+profile in the browser and watch it survive a reload.
 
 **Do not double-click it.** Opening it from Explorer gives the browser a
 `file://` address, and browsers refuse to load JavaScript modules over
@@ -25,8 +27,8 @@ makes this pleasant.
 JavaScript errors show up. When a page goes blank or a button does nothing,
 the answer is almost always the first red line in there.
 
-**Node.js** is only needed for the parity harness below, not for viewing
-pages. `node --version` in a terminal says whether you have it.
+**Node.js** is only needed for the two harnesses below, not for viewing pages.
+`node --version` in a terminal says whether you have it.
 
 ## Why the model came first
 
@@ -95,6 +97,75 @@ Python's `float()` disagree at the edges in both directions. `float(True)` is
 `Number("0x10")` is 16; `float("1_0")` is 10.0 where `Number("1_0")` is NaN.
 `asNumber` in `model.js` now does what `float()` does and says why.
 
+## Saving
+
+`storage.js` is the twin of `storage.py`, same names in the same order. One
+record per profile, the previous save kept, a snapshot at the start of each of
+the last ten days you used the app, and a load that falls back through all of
+it and says what it had to do.
+
+It goes in IndexedDB, which every browser has had for a decade, on phones as
+well as desktops. Three things about it are worth knowing before building on
+it.
+
+**It belongs to one browser on one device.** Profiles made in Chrome on the
+desktop are not the profiles Safari shows on a phone. Nothing in the browser
+can change that, because there is no server. The interface has to say so out
+loud rather than letting someone go looking for a profile that was never going
+to be there.
+
+**The browser can throw it away.** Storage is evicted when a disk fills, and
+Safari clears script storage after seven days of not visiting a site.
+`requestPersistence()` asks the browser not to and the browser is allowed to
+say no. So export is not a nicety here the way it is on the desktop. It is the
+backup that outlives the browser, and the app should push people towards it.
+
+**It is stronger than the desktop in exactly one place.** `storage.py` writes
+to a temporary file, flushes it to the disk and renames it, and there is a
+sliver of time between its two renames where the live file does not exist.
+That is covered rather than merely small, but it is there. An IndexedDB
+transaction commits whole or not at all, so the same three steps here have no
+gap between them at all.
+
+### Checking it
+
+```
+node --import fake-indexeddb/auto web/storage_run.mjs
+```
+
+The first time, `npm install --no-save fake-indexeddb` puts the stand-in in
+place. Nothing the app ships depends on it, `node_modules` is ignored by git,
+and deleting it costs one command to get back.
+
+A stand-in is not the real thing, so the same checks run in `dev.html` against
+the real IndexedDB, and that is the run that counts. They live in one file,
+`storage_checks.js`, so there is no second copy to keep in step. The database
+they use is called `invenfloor-checks` and is wiped before and after, so
+running them can never touch real profiles.
+
+These are ordinary tests rather than a parity harness, and that is worth being
+honest about: I wrote the code and I wrote the tests, so a misunderstanding in
+one can live happily in the other. What they are good for is the thing that
+actually goes wrong in a file like this, which is not arithmetic. It is order.
+Was the snapshot taken before the write or after it. Did the broken record
+move out of the way before the next save, or did the next save bury the backup
+it was rescued from. Every one of those is a sequence of writes with a wrong
+answer at the end, and that is exactly what a test can pin down.
+
+Each of the fifty was then checked by breaking `storage.js` on purpose,
+fourteen different ways, and making sure the checks noticed. A check that
+passes on broken code is not a check.
+
+### One gap, on the desktop side
+
+Saves can now travel, and the desktop app has no way to open one. It reads
+whatever is in its `data\` folder and there is no Import button.
+
+So a profile downloaded from the browser goes over by renaming it to just its
+id, `a3f9c1d2.json`, and dropping it in `data\`. That works today and it is a
+silly thing to ask of anybody. An Import button on the profile screen is a
+small job and should happen before this is shown to anyone.
+
 ## No build step
 
 Plain ES modules. Open the page and it runs. A bundler is a thing that breaks
@@ -102,16 +173,12 @@ and needs maintaining, and nothing here needs one.
 
 ## What is next
 
-1. **Storage behind an interface.** IndexedDB first, because it works on
-   every device today, shaped like `storage.py` so the server version later
-   is one module swapped rather than a rewrite. Plus export and import of the
-   same JSON, which is what makes browser storage survivable: it is per
-   device and Safari clears it after a week of not visiting.
-2. **The room view**, which mostly exists already. The demo on the portfolio
+1. **The room view**, which mostly exists already. The demo on the portfolio
    site is the projection, the wall culling and the containment test running
    in a canvas. It needs to read this model instead of its own flattened one.
-3. **The floor plan canvas**, which is the larger piece and has no head start.
-4. **The items screen.**
+2. **The floor plan canvas**, which is the larger piece and has no head start.
+3. **The items screen.**
+4. **An Import button on the desktop app**, per the gap above.
 
 Rough sizes, from the Python: about 2,000 lines of model and storage, and
-somewhere north of 8,000 of interface. The model is the part that is done.
+somewhere north of 8,000 of interface. The part underneath is now done.

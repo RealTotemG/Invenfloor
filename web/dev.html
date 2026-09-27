@@ -8,10 +8,12 @@
 <!--
   A workbench, not the app. There is no app yet.
 
-  Two jobs. It proves model.js works in a real browser rather than only in
+  Three jobs. It proves model.js works in a real browser rather than only in
   node, which is not the same thing and is worth knowing before anything is
-  built on top of it. And it reads a save file from the desktop app, which
-  is the claim that matters most: the same file, both programs.
+  built on top of it. It reads a save file from the desktop app, which is the
+  claim that matters most: the same file, both programs. And it runs the
+  storage checks against the real IndexedDB, which node can only pretend to
+  have.
 
   THIS WILL NOT WORK IF YOU DOUBLE-CLICK IT.
   ------------------------------------------
@@ -51,6 +53,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
 .tally { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
 .tally.pass { color: var(--good); }
 .tally.fail { color: var(--bad); }
+.tally.busy { color: var(--dim); }
 
 ul.checks { list-style: none; margin: 0; padding: 0; }
 ul.checks li {
@@ -61,7 +64,11 @@ ul.checks li:first-child { border-top: 0; }
 .mark { font-family: var(--mono); font-weight: 700; flex: none; width: 3.2em; }
 .mark.ok { color: var(--good); }
 .mark.no { color: var(--bad); }
-.why { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+/* A failure's reason can be a stack trace. min-width: 0 is what lets a flex
+   item shrink below the width of its own content, and without it a long line
+   pushes the whole panel sideways. */
+.why { color: var(--faint); font-family: var(--mono); font-size: 12px;
+       white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
 
 input[type=file] { font: inherit; font-size: 13px; color: var(--dim); }
 button {
@@ -70,6 +77,8 @@ button {
   border-radius: 7px; padding: 8px 16px; cursor: pointer;
 }
 button.ghost { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+button.small { font-size: 13px; padding: 5px 11px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th, td { text-align: left; padding: 6px 10px 6px 0; border-top: 1px solid var(--line); }
@@ -79,20 +88,22 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
           margin-right: 7px; vertical-align: baseline; }
 .todo li { color: var(--dim); margin-bottom: 6px; }
+.todo li.done { color: var(--faint); }
+.warn { color: var(--warn); }
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <h1>Invenfloor web: workbench</h1>
-  <p class="sub">Not the app. A page to check the model works in a browser,
-     and to throw a real save file at it.</p>
+  <p class="sub">Not the app. A page to check the model and the saving work in
+     a browser, and to throw a real save file at them.</p>
 
   <h2>1. Does model.js run here?</h2>
   <p class="note">Node already says yes. A browser is a different runtime, and
      finding out now beats finding out after three screens are built on it.</p>
   <div class="panel">
-    <p class="tally" id="tally">running…</p>
+    <p class="tally busy" id="tally">running…</p>
     <ul class="checks" id="checks"></ul>
   </div>
 
@@ -104,26 +115,79 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
     file is read in this page and thrown away when you close the tab.
   </p>
   <div class="panel">
-    <input type="file" id="pick" accept=".json,application/json">
-    <button class="ghost" id="sample" style="margin-left:8px">Or use a made-up one</button>
+    <div class="row">
+      <input type="file" id="pick" accept=".json,application/json">
+      <button class="ghost" id="sample">Or use a made-up one</button>
+    </div>
     <div id="loaded" style="margin-top:14px"></div>
   </div>
 
-  <h2>3. What is not built yet</h2>
+  <h2>3. Does the saving work?</h2>
+  <p class="note">
+    The same checks <code>storage_run.mjs</code> runs in node, run here against
+    the real IndexedDB instead of a stand-in. They use a database of their own
+    called <code>invenfloor-checks</code>, wiped before and after, so your own
+    profiles in <code>invenfloor</code> are never touched.
+  </p>
+  <div class="panel">
+    <p class="tally busy" id="storeTally">running…</p>
+    <ul class="checks" id="storeChecks"></ul>
+  </div>
+
+  <h2>4. What is saved in this browser</h2>
+  <p class="note">
+    The real store, the one the app will use. It belongs to this browser on
+    this device: what you save in Chrome here is not what Safari on a phone
+    will show, because there is no server yet.
+    <span class="warn">Safari clears this after a week of not visiting.</span>
+    Which is why there is a Download button, and why the app will push it.
+  </p>
+  <div class="panel">
+    <div id="stored">reading…</div>
+  </div>
+
+  <h2>5. What is not built yet</h2>
   <ul class="todo">
-    <li><b>Storage.</b> Nothing is saved. Reload and it is gone.</li>
+    <li class="done"><s>Storage.</s> Done, and checked above.</li>
     <li><b>The floor plan canvas.</b> The biggest remaining piece.</li>
     <li><b>The room view.</b> Mostly exists, as the demo on the portfolio
         site. It needs to read this model instead of its own flattened one.</li>
     <li><b>The items screen.</b></li>
   </ul>
+  <p class="note">
+    One thing the desktop app is missing, now that saves can travel: it has no
+    way to open a file that is not already in its data folder. Until it does,
+    a profile downloaded here goes over by renaming it to just its id,
+    <code>a3f9c1d2.json</code>, and dropping it in <code>data\</code>.
+  </p>
 </div>
 
 <script type="module">
 import * as M from "./model.js";
+import * as S from "./storage.js";
+import { runStorageChecks } from "./storage_checks.js";
+
+const escape = text => String(text).replace(/[<>&]/g,
+  c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+
+/** Draw a list of { label, ok, why } into a tally and a list. */
+function report(tallyId, listId, results) {
+  const passed = results.filter(r => r.ok).length;
+  const tally = document.getElementById(tallyId);
+  tally.textContent = passed === results.length
+    ? `all ${results.length} checks passed`
+    : `${results.length - passed} of ${results.length} FAILED`;
+  tally.className = "tally " + (passed === results.length ? "pass" : "fail");
+
+  document.getElementById(listId).innerHTML = results.map(r =>
+    `<li><span class="mark ${r.ok ? "ok" : "no"}">${r.ok ? "ok" : "FAIL"}</span>`
+    + `<span>${escape(r.label)}</span>`
+    + (r.why && !r.ok ? `<span class="why">${escape(r.why)}</span>` : "")
+    + `</li>`).join("");
+}
 
 // ---------------------------------------------------------------------------
-// 1. Checks
+// 1. Does the model run here
 // ---------------------------------------------------------------------------
 const results = [];
 const check = (label, ok, why = "") => results.push({ label, ok, why });
@@ -205,40 +269,38 @@ try {
 } catch (error) {
   check("model.js loaded and ran", false, String(error));
 }
-
-const passed = results.filter(r => r.ok).length;
-const tally = document.getElementById("tally");
-tally.textContent = passed === results.length
-  ? `all ${results.length} checks passed`
-  : `${results.length - passed} of ${results.length} FAILED`;
-tally.className = "tally " + (passed === results.length ? "pass" : "fail");
-
-document.getElementById("checks").innerHTML = results.map(r =>
-  `<li><span class="mark ${r.ok ? "ok" : "no"}">${r.ok ? "ok" : "FAIL"}</span>`
-  + `<span>${r.label}</span>`
-  + (r.why && !r.ok ? `<span class="why">${r.why}</span>` : "")
-  + `</li>`).join("");
+report("tally", "checks", results);
 
 // ---------------------------------------------------------------------------
 // 2. Reading a real save file
 // ---------------------------------------------------------------------------
 const where = document.getElementById("loaded");
-const escape = text => String(text).replace(/[<>&]/g,
-  c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+let showing = null;          // the profile currently described, for the buttons
 
 function describe(profile, source) {
+  showing = profile;
   const rooms = [...profile.allRooms()];
   const containers = [...profile.allContainers()];
-  const items = profile.items.length;
-  const placed = profile.items.filter(i => !i.isUnfiled()).length;
 
   // The claim worth testing: what goes out is what came in.
   const again = M.Profile.fromDict(structuredClone(profile.toDict())).toDict();
   const stable = JSON.stringify(again) === JSON.stringify(profile.toDict());
 
+  // And the same claim through the exported text, which is the form it
+  // travels in. A round trip in memory can pass while the text loses
+  // something, so both are worth asking.
+  let throughText = false;
+  try {
+    throughText = JSON.stringify(S.readExport(S.exportText(profile)).toDict())
+                  === JSON.stringify(profile.toDict());
+  } catch { /* leave it false, the line below says so */ }
+
   where.innerHTML = `
-    <p class="tally ${stable ? "pass" : "fail"}">
-      ${escape(source)} read ${stable ? "and survives a round trip" : "BUT CHANGES ON A ROUND TRIP"}
+    <p class="tally ${stable && throughText ? "pass" : "fail"}">
+      ${escape(source)} read ${stable && throughText
+        ? "and survives a round trip, in memory and through a file"
+        : (stable ? "BUT CHANGES WHEN WRITTEN OUT AND READ BACK"
+                  : "BUT CHANGES ON A ROUND TRIP")}
     </p>
     <table>
       <tr><th>Profile</th><th>Floors</th><th>Rooms</th><th>Containers</th>
@@ -249,8 +311,8 @@ function describe(profile, source) {
         <td class="num">${profile.floors.length}</td>
         <td class="num">${rooms.length}</td>
         <td class="num">${containers.length}</td>
-        <td class="num">${items}</td>
-        <td class="num">${placed}</td>
+        <td class="num">${profile.items.length}</td>
+        <td class="num">${profile.items.filter(i => !i.isUnfiled()).length}</td>
         <td class="num">${profile.schema}</td>
       </tr>
     </table>
@@ -269,17 +331,45 @@ function describe(profile, source) {
       }).join("")}
     </table>` : ""}
     ${rooms.length > 12 ? `<p class="note">and ${rooms.length - 12} more rooms</p>` : ""}
+    <div class="row" style="margin-top:14px">
+      <button class="ghost small" id="keep">Save it in this browser</button>
+      <button class="ghost small" id="send">Download it as a save file</button>
+    </div>
+    <p class="note" id="kept"></p>
   `;
+
+  document.getElementById("send").addEventListener("click", () => {
+    S.download(showing);
+  });
+  document.getElementById("keep").addEventListener("click", async () => {
+    const said = document.getElementById("kept");
+    if (!store) {
+      said.textContent = "There is nowhere to save it. See section 4.";
+      return;
+    }
+    try {
+      // Through the text on the way in, which is what importing is, so a
+      // profile that arrived from a file does not keep its id and quietly
+      // replace one already here.
+      const saved = await store.importProfile(S.exportText(showing));
+      said.textContent = `Saved as ${saved.name}. It is in section 4, and it `
+                       + `will still be there after a reload.`;
+      await showStored();
+    } catch (error) {
+      said.innerHTML = `<span class="mark no">FAIL</span> ${escape(error.message)}`;
+    }
+  });
 }
 
 document.getElementById("pick").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file) return;
   try {
-    describe(M.Profile.fromDict(JSON.parse(await file.text())), file.name);
+    describe(S.readExport(await file.text()), file.name);
   } catch (error) {
+    showing = null;
     where.innerHTML = `<p class="tally fail">Could not read ${escape(file.name)}</p>`
-      + `<p class="why">${escape(error)}</p>`;
+      + `<p class="why">${escape(error.message ?? error)}</p>`;
   }
 });
 
@@ -307,6 +397,89 @@ document.getElementById("sample").addEventListener("click", () => {
   // the round trip.
   describe(M.Profile.fromDict(profile.toDict()), "A made-up profile");
 });
+
+// ---------------------------------------------------------------------------
+// 3. Does the saving work
+// ---------------------------------------------------------------------------
+// Started rather than awaited. It is the slowest thing on the page, a few
+// hundred writes, and nothing below it needs the answer. Awaiting here would
+// leave section 4 empty and the buttons in section 2 pointing at a store that
+// had not been opened yet.
+runStorageChecks()
+  .then(found => report("storeTally", "storeChecks", found))
+  .catch(error => report("storeTally", "storeChecks",
+                         [{ label: "the checks ran at all", ok: false,
+                            why: String(error?.stack ?? error) }]));
+
+// ---------------------------------------------------------------------------
+// 4. What is in the real store
+// ---------------------------------------------------------------------------
+const shelf = document.getElementById("stored");
+let store = null;
+
+const when = milliseconds => milliseconds
+  ? new Date(milliseconds).toLocaleString()
+  : "never";
+
+async function showStored() {
+  if (!store) return;
+  const { profiles, recoveries, refused } = await store.list();
+
+  const rows = [];
+  for (const profile of profiles) {
+    rows.push(`<tr>
+      <td><span class="swatch" style="background:${escape(profile.color)}"></span>
+          ${escape(M.short(profile.name, 24))}</td>
+      <td class="num">${escape(profile.id)}</td>
+      <td class="num">${[...profile.allRooms()].length}</td>
+      <td class="num">${[...profile.allContainers()].length}</td>
+      <td class="num">${profile.items.length}</td>
+      <td class="num">${escape(when(await store.savedAt(profile.id)))}</td>
+      <td class="num">${(await store.snapshots(profile.id)).length}</td>
+      <td><button class="ghost small" data-download="${escape(profile.id)}">Download</button>
+          <button class="ghost small" data-remove="${escape(profile.id)}">Remove</button></td>
+    </tr>`);
+  }
+
+  shelf.innerHTML = (profiles.length
+    ? `<table>
+         <tr><th>Profile</th><th>Id</th><th>Rooms</th><th>Containers</th>
+             <th>Items</th><th>Saved</th><th>Backups</th><th></th></tr>
+         ${rows.join("")}
+       </table>`
+    : `<p class="note">Nothing saved here yet. Open a file above, or make one
+          up, and press "Save it in this browser".</p>`)
+    + recoveries.map(r =>
+        `<p class="tally fail">${escape(r.profileName)} would not open, and was
+          rescued from ${escape(r.cameFrom)}. The unreadable one is kept as
+          <code>${escape(r.brokenKey)}</code>.</p>`).join("")
+    + refused.map(r =>
+        `<p class="tally fail">${escape(r.name || r.id)} could not be opened.
+          ${escape(r.why)}</p>`).join("");
+
+  // One handler for every button, so rows redrawing does not leave handlers
+  // attached to elements nobody can see any more.
+  shelf.querySelectorAll("[data-download]").forEach(button =>
+    button.addEventListener("click", async () => {
+      const profile = await store.load(button.dataset.download);
+      if (profile) S.download(profile);
+    }));
+  shelf.querySelectorAll("[data-remove]").forEach(button =>
+    button.addEventListener("click", async () => {
+      await store.delete(button.dataset.remove);
+      await showStored();
+    }));
+}
+
+try {
+  store = await S.Store.open();
+  await showStored();
+} catch (error) {
+  shelf.innerHTML = `<p class="tally fail">This browser will not save anything</p>`
+    + `<p class="why">${escape(error.message ?? error)}</p>`
+    + `<p class="note">Private browsing, or site data switched off. The app has
+         to carry on and say so rather than pretending it saved.</p>`;
+}
 </script>
 </body>
 </html>
