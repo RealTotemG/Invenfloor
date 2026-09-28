@@ -90,6 +90,22 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .todo li { color: var(--dim); margin-bottom: 6px; }
 .todo li.done { color: var(--faint); }
 .warn { color: var(--warn); }
+
+.lock { border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+.lock input[type=text], .lock input[type=password] {
+  font: inherit; font-size: 14px; background: var(--ink); color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px;
+  /* Flex items will not shrink below the width of their own content, and an
+     input's content width comes from its size attribute. Without these two a
+     long panel pushes the whole page sideways on a phone. */
+  min-width: 0; flex: 1 1 0; width: 0;
+}
+.code {
+  font-family: var(--mono); font-size: 18px; letter-spacing: .06em;
+  color: var(--good); background: var(--ink); border: 1px solid var(--good);
+  border-radius: 7px; padding: 10px 14px; margin: 10px 0 4px;
+  display: inline-block; overflow-wrap: anywhere;
+}
 </style>
 </head>
 <body>
@@ -125,13 +141,26 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   <h2>3. Does the saving work?</h2>
   <p class="note">
     The same checks <code>storage_run.mjs</code> runs in node, run here against
-    the real IndexedDB instead of a stand-in. They use a database of their own
-    called <code>invenfloor-checks</code>, wiped before and after, so your own
-    profiles in <code>invenfloor</code> are never touched.
+    the real IndexedDB instead of a stand-in. They use databases of their own,
+    wiped before and after, so your own profiles in <code>invenfloor</code> are
+    never touched.
+  </p>
+  <p class="note">
+    The saving checks run twice, once plain and once with a passphrase over the
+    database. Not two sets of checks, the same set. That is the claim
+    encryption has to earn: it changes nothing.
   </p>
   <div class="panel">
-    <p class="tally busy" id="storeTally">running…</p>
+    <p class="tally busy" id="vaultTally">the lock itself: running…</p>
+    <ul class="checks" id="vaultChecks"></ul>
+  </div>
+  <div class="panel">
+    <p class="tally busy" id="storeTally">saving, with nothing over it: running…</p>
     <ul class="checks" id="storeChecks"></ul>
+  </div>
+  <div class="panel">
+    <p class="tally busy" id="lockedTally">saving, with a passphrase over it: running…</p>
+    <ul class="checks" id="lockedChecks"></ul>
   </div>
 
   <h2>4. What is saved in this browser</h2>
@@ -143,7 +172,8 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
     Which is why there is a Download button, and why the app will push it.
   </p>
   <div class="panel">
-    <div id="stored">reading…</div>
+    <div id="lock" class="lock"></div>
+    <div id="stored" style="margin-top:14px">reading…</div>
   </div>
 
   <h2>5. What is not built yet</h2>
@@ -165,18 +195,18 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 <script type="module">
 import * as M from "./model.js";
 import * as S from "./storage.js";
-import { runStorageChecks } from "./storage_checks.js";
+import { runStorageChecks, runVaultChecks } from "./storage_checks.js";
 
 const escape = text => String(text).replace(/[<>&]/g,
   c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 
 /** Draw a list of { label, ok, why } into a tally and a list. */
-function report(tallyId, listId, results) {
+function report(tallyId, listId, results, title = "") {
   const passed = results.filter(r => r.ok).length;
   const tally = document.getElementById(tallyId);
-  tally.textContent = passed === results.length
+  tally.textContent = (title ? `${title}: ` : "") + (passed === results.length
     ? `all ${results.length} checks passed`
-    : `${results.length - passed} of ${results.length} FAILED`;
+    : `${results.length - passed} of ${results.length} FAILED`);
   tally.className = "tally " + (passed === results.length ? "pass" : "fail");
 
   document.getElementById(listId).innerHTML = results.map(r =>
@@ -401,15 +431,25 @@ document.getElementById("sample").addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 // 3. Does the saving work
 // ---------------------------------------------------------------------------
-// Started rather than awaited. It is the slowest thing on the page, a few
-// hundred writes, and nothing below it needs the answer. Awaiting here would
-// leave section 4 empty and the buttons in section 2 pointing at a store that
-// had not been opened yet.
-runStorageChecks()
-  .then(found => report("storeTally", "storeChecks", found))
-  .catch(error => report("storeTally", "storeChecks",
-                         [{ label: "the checks ran at all", ok: false,
-                            why: String(error?.stack ?? error) }]));
+// Started rather than awaited. These are the slowest things on the page, a
+// few hundred writes and a pile of deliberately slow key derivations, and
+// nothing below them needs the answer. Awaiting here would leave section 4
+// empty and the buttons in section 2 pointing at a store not yet opened.
+function runInto(tallyId, listId, title, work) {
+  Promise.resolve().then(work)
+    .then(found => report(tallyId, listId, found, title))
+    .catch(error => report(tallyId, listId,
+                           [{ label: "the checks ran at all", ok: false,
+                              why: String(error?.stack ?? error) }], title));
+}
+
+runInto("vaultTally", "vaultChecks", "the lock itself",
+        () => runVaultChecks());
+runInto("storeTally", "storeChecks", "saving, with nothing over it",
+        () => runStorageChecks("invenfloor-checks"));
+runInto("lockedTally", "lockedChecks", "saving, with a passphrase over it",
+        () => runStorageChecks("invenfloor-checks-locked",
+                               { passphrase: "a checking passphrase" }));
 
 // ---------------------------------------------------------------------------
 // 4. What is in the real store
@@ -421,8 +461,116 @@ const when = milliseconds => milliseconds
   ? new Date(milliseconds).toLocaleString()
   : "never";
 
+/** The passphrase controls. Three states, and the page is only ever in one:
+ *  no lock, locked, or unlocked with a lock on.
+ *
+ *  `notice` is drawn under the controls after they are redrawn, which is how
+ *  the recovery code survives the redraw that follows setting a passphrase.
+ *  It is the only time that code will ever be readable, so losing it to a
+ *  repaint would be the single worst bug on this page.
+ */
+function showLock(notice = "") {
+  const box = document.getElementById("lock");
+  if (!store) { box.innerHTML = ""; return; }
+  const after = () => {
+    if (notice) document.getElementById("lockSays").innerHTML = notice;
+  };
+
+  if (!store.hasLock) {
+    box.innerHTML = `
+      <div class="row">
+        <input type="password" id="pass" placeholder="a passphrase, then press the button">
+        <button class="ghost small" id="setLock">Put a passphrase on this</button>
+      </div>
+      <p class="note" id="lockSays">Everything saved here goes in as ciphertext.
+        There is no reset: lose the passphrase and the recovery code and the
+        data is gone, which is the point rather than an oversight.</p>`;
+    document.getElementById("setLock").addEventListener("click", async () => {
+      const says = document.getElementById("lockSays");
+      const typed = document.getElementById("pass").value;
+      if (!typed) { says.textContent = "It needs a passphrase."; return; }
+      says.textContent = "Encrypting everything already saved…";
+      try {
+        const code = await store.addLock(typed);
+        showLock(`<b class="warn">Write this down now.</b> It is the only way
+          back in if the passphrase is forgotten, and this is the one and only
+          time it is readable.<br><span class="code">${escape(code)}</span>`);
+        await showStored();
+      } catch (error) {
+        says.innerHTML = `<span class="mark no">FAIL</span> ${escape(error.message)}`;
+      }
+    });
+    after();
+    return;
+  }
+
+  if (store.locked) {
+    box.innerHTML = `
+      <div class="row">
+        <input type="password" id="pass" placeholder="passphrase, or a recovery code">
+        <button class="ghost small" id="doUnlock">Unlock</button>
+      </div>
+      <p class="note" id="lockSays">Locked. Unlocking takes a moment on
+        purpose: the slow part is what makes guessing expensive.</p>`;
+    document.getElementById("doUnlock").addEventListener("click", async () => {
+      const says = document.getElementById("lockSays");
+      says.textContent = "Unlocking…";
+      const started = performance.now();
+      try {
+        const used = await store.unlock(document.getElementById("pass").value);
+        const took = Math.round(performance.now() - started);
+        showLock(used === "recovery"
+          ? `Open, using the recovery code (${took}ms). Set a new passphrase, `
+            + `and issue a new code while you are at it.`
+          : `Open (${took}ms).`);
+        await showStored();
+      } catch (error) {
+        says.innerHTML = `<span class="mark no">FAIL</span> ${escape(error.message)}`;
+      }
+    });
+    after();
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="row">
+      <span class="note" style="flex:1 1 auto">Unlocked. The database holds
+        ciphertext; only this tab can read it.</span>
+      <button class="ghost small" id="doRelock">Lock now</button>
+      <button class="ghost small" id="doRemove">Take the passphrase off</button>
+    </div>
+    <p class="note" id="lockSays"></p>`;
+  document.getElementById("doRelock").addEventListener("click", async () => {
+    store.relock();
+    showLock();
+    await showStored();
+  });
+  document.getElementById("doRemove").addEventListener("click", async () => {
+    const says = document.getElementById("lockSays");
+    says.textContent = "Decrypting everything…";
+    try {
+      await store.removeLock();
+      showLock("The passphrase is off. Everything here is readable again.");
+      await showStored();
+    } catch (error) {
+      says.innerHTML = `<span class="mark no">FAIL</span> ${escape(error.message)}`;
+    }
+  });
+  after();
+}
+
 async function showStored() {
   if (!store) return;
+
+  if (store.locked) {
+    const ids = await store.ids();
+    shelf.innerHTML = `<p class="note">${ids.length} profile${
+      ids.length === 1 ? "" : "s"} saved here, locked. The ids and the dates
+      stay readable because they are what records are filed under. Nothing
+      else does.</p>`;
+    return;
+  }
+
   const { profiles, recoveries, refused } = await store.list();
 
   const rows = [];
@@ -473,6 +621,7 @@ async function showStored() {
 
 try {
   store = await S.Store.open();
+  showLock();
   await showStored();
 } catch (error) {
   shelf.innerHTML = `<p class="tally fail">This browser will not save anything</p>`

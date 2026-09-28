@@ -20,6 +20,15 @@
  * those is a sequence of writes with a wrong answer at the end, and that is
  * exactly what a test can pin down.
  *
+ * THE WHOLE SET RUNS TWICE
+ * ------------------------
+ * Once on a plain database and once on one with a passphrase over it. Not two
+ * sets of checks, the same set, because that is the claim worth making about
+ * encryption: it changes nothing. Backups still happen daily, a wrecked record
+ * is still rescued from the same places in the same order, the launcher still
+ * sorts the same way. If any of the fifty behaves differently with a lock on,
+ * the lock is in the wrong place.
+ *
  * They run in two places, from this one file:
  *
  *   - the browser, from dev.html, which is where IndexedDB really lives
@@ -33,12 +42,13 @@
  */
 import * as M from "./model.js";
 import * as S from "./storage.js";
+import * as V from "./vault.js";
 
 // ---------------------------------------------------------------------------
 // REACHING PAST THE FRONT DOOR
 // ---------------------------------------------------------------------------
 // Nothing in storage.js lets a caller write a broken record, which is correct
-// and also means the checks have to go around it. These four helpers touch the
+// and also means the checks have to go around it. These helpers touch the
 // database directly. They are here and not there on purpose.
 
 function settled(transaction) {
@@ -72,6 +82,19 @@ function peek(store, storeName, key) {
 function peekKeys(store, storeName) {
   return answered(store.database.transaction(storeName, "readonly")
                        .objectStore(storeName).getAllKeys());
+}
+
+/** The profile name inside a record, sealed or not.
+ *
+ *  Most of the checks below want to know which version of a profile ended up
+ *  in a particular slot. Reading `.profile.name` off the raw record works
+ *  until there is a passphrase, at which point there is no `.profile` to
+ *  read. This asks the store to open it, so the same check reads the same way
+ *  in both runs.
+ */
+async function nameAt(store, storeName, key) {
+  const opened = await store._unseal(await peek(store, storeName, key));
+  return opened?.profile?.name ?? null;
 }
 
 /** Delete a database and do not care why it worked.
@@ -111,10 +134,35 @@ function madeUp(name) {
   return profile;
 }
 
-/** Valid JSON, and not a profile. What the gate in storage.js is for. */
+/** Valid JSON, and not a profile. What the gate in storage.js is for.
+ *
+ *  Deliberately planted unsealed, even in the locked run. A record that is
+ *  not ours is not going to be encrypted the way ours are, so this is the
+ *  more realistic corruption of the two. The locked run adds the other kind,
+ *  a sealed record with a byte changed, further down. */
 const NOT_A_PROFILE = { savedAt: 1, profile: { hello: "world" } };
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Did this throw, and with what? Returns something to read, or "" if it did
+ *  not throw at all.
+ *
+ *  The name is a fallback and not a nicety. Web Crypto rejects with a
+ *  DOMException whose message is the empty string in Chrome, where node fills
+ *  in a sentence, so a check written as "did it come back with a message"
+ *  passes in node and fails in a browser for no reason anybody would guess
+ *  from reading it. Falling back to the name keeps the answer truthful in
+ *  both. This is exactly why the checks run in a real browser and not only
+ *  under a stand-in.
+ */
+async function refusedWith(work) {
+  try {
+    await work();
+    return "";
+  } catch (error) {
+    return error?.message || error?.name || String(error) || "it threw";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // THE CHECKS
@@ -123,17 +171,30 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 /** Run every check against a database of its own. Returns
  *  [{ label, ok, why }] in the order they ran.
  *
- *  The database is deleted before and after, so this never touches real
- *  profiles and never depends on what a previous run left behind.
+ *  Pass a passphrase to run the whole set with a lock on. The database is
+ *  deleted before and after either way, so this never touches real profiles
+ *  and never depends on what a previous run left behind.
  */
-export async function runStorageChecks(databaseName = "invenfloor-checks") {
+export async function runStorageChecks(databaseName = "invenfloor-checks",
+                                       { passphrase = null } = {}) {
   const results = [];
   const check = (label, ok, why = "") => results.push({ label, ok, why: String(why) });
   let store = null;
+  let recoveryCode = null;
 
   try {
     await wipe(databaseName);
     store = await S.Store.open(databaseName);
+
+    if (passphrase) {
+      check("a database with no lock on it does not claim to have one",
+            !store.hasLock && !store.locked);
+      recoveryCode = await store.addLock(passphrase);
+      check("adding a passphrase gives back a recovery code",
+            /^[0-9A-Z]{5}(-[0-9A-Z]{5}){3}$/.test(recoveryCode), recoveryCode);
+      check("and the store is unlocked once it is set up",
+            store.hasLock && !store.locked);
+    }
 
     // -- the ordinary path --------------------------------------------------
 
@@ -154,6 +215,19 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
           (await store.savedAt(profile.id)) === firstSavedAt);
     check("savedAt of a profile that is not there is null",
           (await store.savedAt("nosuchid")) === null);
+
+    if (passphrase) {
+      const raw = await peek(store, "profiles", profile.id);
+      check("what is actually in the database is sealed",
+            raw.profile === undefined && Boolean(raw.sealed)
+            && raw.sealed.iv.length === 12,
+            JSON.stringify(Object.keys(raw)));
+      check("and the ciphertext holds none of the words you typed",
+            !new TextDecoder().decode(new Uint8Array(raw.sealed.body))
+                 .includes("Kitchen"));
+      check("the id stays readable, because it is the key it is filed under",
+            raw.id === profile.id);
+    }
 
     // -- one snapshot a day, not one a save ---------------------------------
 
@@ -176,7 +250,7 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
     check("and it holds the state from before that day's work",
           snapshots[0].name === "Kitchen one", snapshots[0].name);
     check("the previous save is the one just before this one",
-          (await peek(store, "previous", profile.id)).profile.name === "Kitchen three");
+          (await nameAt(store, "previous", profile.id)) === "Kitchen three");
 
     store.today = () => "2026-09-21";
     profile.name = "Kitchen five";
@@ -207,7 +281,7 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
 
     // Live is wrecked. The previous save is a real one, so that is where this
     // should come from.
-    const wanted = (await peek(store, "previous", profile.id)).profile.name;
+    const wanted = await nameAt(store, "previous", profile.id);
     await plant(store, "profiles", profile.id, NOT_A_PROFILE);
 
     listed = await store.list();
@@ -241,7 +315,7 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
     profile.name = "Kitchen after the rescue";
     await store.save(profile);
     check("the save after a rescue does not overwrite the backup with rubbish",
-          S.looksLikeAProfile((await peek(store, "previous", profile.id)).profile),
+          (await nameAt(store, "previous", profile.id)) !== null,
           "previous is not a profile any more");
 
     // Now wreck both, and leave the snapshots alone.
@@ -330,15 +404,11 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
           && (await store.load(profile.id)).name === day.name,
           `${restored.name} vs ${day.name}`);
     check("and what it replaced is still in the previous save",
-          (await peek(store, "previous", profile.id)).profile.name === beforeRestore,
+          (await nameAt(store, "previous", profile.id)) === beforeRestore,
           beforeRestore);
 
-    let refusedRestore = "";
-    try {
-      await store.restore(profile.id, "1999-01-01");
-    } catch (error) {
-      refusedRestore = error.message;
-    }
+    const refusedRestore = await refusedWith(
+      () => store.restore(profile.id, "1999-01-01"));
     check("restoring a day with no backup says so and changes nothing",
           /no backup/.test(refusedRestore)
           && (await store.load(profile.id)).name === day.name,
@@ -370,6 +440,13 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
           same(S.readExport(text).toDict(), sent.toDict()));
     check("exported text is indented, so a person can read it",
           text.includes("\n  \"name\""), JSON.stringify(text.slice(0, 24)));
+    if (passphrase) {
+      // Deliberate, and the interface has to say so where somebody can see
+      // it. An export that only opens in the browser that made it is not a
+      // backup, it is a second thing to lose the key to.
+      check("an export is readable even with a passphrase on the database",
+            text.includes("Carried across"));
+    }
 
     const imported = await store.importProfile(text);
     check("importing something new keeps its id",
@@ -385,12 +462,7 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
     for (const [bad, expected] of [["not json at all", /not JSON/],
                                    ['{"a":1}', /not an Invenfloor profile/],
                                    ['[]', /not an Invenfloor profile/]]) {
-      let complaint = "";
-      try {
-        S.readExport(bad);
-      } catch (error) {
-        complaint = error.message;
-      }
+      const complaint = await refusedWith(() => S.readExport(bad));
       check(`importing ${JSON.stringify(bad)} says why it will not`,
             expected.test(complaint), complaint || "it did not complain");
     }
@@ -419,6 +491,110 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
           S.fileNameFor(new M.Profile({ id: "a3f9c1d2", name: "???" }))
           === "Profile a3f9c1d2.json",
           S.fileNameFor(new M.Profile({ id: "a3f9c1d2", name: "???" })));
+
+    // -- everything that only applies with a lock on ------------------------
+
+    if (passphrase) {
+      const kept = (await store.load(profile.id)).name;
+
+      store.relock();
+      check("relocking shuts it again", store.locked);
+      check("and nothing can be read while it is shut",
+            /locked/i.test(await refusedWith(() => store.list())));
+      check("nor written",
+            /locked/i.test(await refusedWith(() => store.save(profile))));
+      check("but the ids are still countable, for a launcher to say how many",
+            (await store.ids()).length > 0);
+      check("and so are the dates",
+            (await store.savedAt(profile.id)) !== null);
+
+      check("the wrong passphrase is refused",
+            (await refusedWith(() => store.unlock("not it"))).length > 0);
+      check("and it stays shut after being told the wrong one", store.locked);
+
+      check("the right one opens it",
+            (await store.unlock(passphrase)) === "passphrase");
+      check("and everything is where it was left",
+            (await store.load(profile.id)).name === kept, kept);
+
+      store.relock();
+      check("the recovery code opens it too, typed however it was written down",
+            (await store.unlock(recoveryCode.toLowerCase().replace(/-/g, " ")))
+            === "recovery");
+
+      // A sealed record with one byte changed. The other kind of damage, and
+      // the one encryption itself catches: AES-GCM checks the whole record
+      // before handing anything back, so a single flipped bit is refused
+      // rather than quietly turning into nonsense.
+      const good = await peek(store, "profiles", profile.id);
+      const bent = new Uint8Array(good.sealed.body.slice(0));
+      bent[0] ^= 1;
+      await plant(store, "profiles", profile.id,
+                  { ...good, sealed: { iv: good.sealed.iv, body: bent.buffer } });
+      listed = await store.list();
+      check("one altered byte in a sealed record is caught and rescued",
+            listed.recoveries.some(r => r.profileName === kept)
+            || listed.profiles.some(p => p.id === profile.id),
+            listed.refused.map(r => r.why).join(" | "));
+
+      // Changing the passphrase must not touch a single stored record.
+      const before = await peek(store, "profiles", profile.id);
+      await store.changePassphrase(passphrase, "a completely different one");
+      check("changing the passphrase leaves the records alone",
+            same(await peek(store, "profiles", profile.id), before));
+      check("the old passphrase stops working",
+            (await refusedWith(async () => {
+              store.relock();
+              await store.unlock(passphrase);
+            })).length > 0);
+      check("the new one works",
+            (await store.unlock("a completely different one")) === "passphrase");
+      check("and the recovery code is deliberately left alone",
+            (await refusedWith(async () => {
+              store.relock();
+              await store.unlock(recoveryCode);
+            })) === "");
+
+      const freshCode = await store.newRecoveryCode();
+      store.relock();
+      check("a reissued recovery code works",
+            (await store.unlock(freshCode)) === "recovery");
+      store.relock();
+      check("and the one it replaced does not",
+            (await refusedWith(() => store.unlock(recoveryCode))).length > 0);
+
+      // The real test of any of this: close the database and open it again.
+      await store.unlock(freshCode);
+      const namesBefore = (await store.list()).profiles.map(p => p.name).sort();
+      store.close();
+      store = await S.Store.open(databaseName);
+      check("a reopened database knows it has a lock",
+            store.hasLock && store.locked);
+      await store.unlock("a completely different one");
+      check("and gives everything back once it is opened",
+            same((await store.list()).profiles.map(p => p.name).sort(),
+                 namesBefore));
+
+      // Something sealed under a key this store has never had, which is what
+      // a broken record set aside before a passphrase change looks like.
+      // Taking the lock off must not write null over it.
+      const stranger = await V.create("somebody else's passphrase");
+      const orphaned = { id: "aaaa0009", savedAt: 5,
+                         sealed: await V.seal(stranger.key, "aaaa0009",
+                                              { id: "aaaa0009", floors: [] }) };
+      await plant(store, "broken", "aaaa0009.broken-one", orphaned);
+
+      await store.removeLock();
+      check("taking the passphrase off leaves the profiles readable",
+            !store.hasLock
+            && (await peek(store, "profiles", profile.id)).profile !== undefined);
+      check("and they still all load",
+            same((await store.list()).profiles.map(p => p.name).sort(),
+                 namesBefore));
+      check("a record that will not open is kept as it is, not wiped",
+            same(await peek(store, "broken", "aaaa0009.broken-one"), orphaned),
+            "unreadable is not the same as worthless");
+    }
   } catch (error) {
     check("the checks ran to the end", false,
           `${error?.message ?? error}\n${error?.stack ?? ""}`);
@@ -430,6 +606,101 @@ export async function runStorageChecks(databaseName = "invenfloor-checks") {
         // A database left behind is untidy, not wrong. The next run wipes it.
       }
     }
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// THE VAULT ON ITS OWN
+// ---------------------------------------------------------------------------
+
+/** Checks for vault.js that do not need a database.
+ *
+ *  Kept apart from the storage checks because they are asking a different
+ *  question. Those ask whether a lock changes how saving behaves. These ask
+ *  whether the lock is any good.
+ */
+export async function runVaultChecks() {
+  const results = [];
+  const check = (label, ok, why = "") => results.push({ label, ok, why: String(why) });
+
+  try {
+    check("Web Crypto is here at all", V.available(),
+          "needs https or localhost");
+
+    const started = Date.now();
+    const { record, key, recoveryCode } = await V.create("a passphrase");
+    const setUp = Date.now() - started;
+    check("setting up a lock takes long enough to be worth guessing at",
+          setUp > 20, `${setUp}ms for two derivations at ${V.ITERATIONS} rounds`);
+
+    check("the recovery code is 20 characters in groups of five",
+          /^[0-9A-Z]{5}(-[0-9A-Z]{5}){3}$/.test(recoveryCode), recoveryCode);
+    check("its alphabet leaves out the letters people mistype",
+          !/[ILOU]/.test(recoveryCode), recoveryCode);
+    check("two codes in a row are not the same",
+          V.newRecoveryCode() !== V.newRecoveryCode());
+    check("a code retyped in lower case with spaces still counts",
+          V.tidyRecoveryCode(recoveryCode.toLowerCase().replace(/-/g, " "))
+          === V.tidyRecoveryCode(recoveryCode));
+    check("and a written O or l is read as the 0 or 1 it was meant to be",
+          V.tidyRecoveryCode("O1lI0") === "01110");
+    check("but Q and V are left alone, because they are real symbols here",
+          V.tidyRecoveryCode("QV") === "QV");
+
+    check("the passphrase is nowhere in what gets stored",
+          !JSON.stringify(record).includes("a passphrase"));
+    check("neither is the recovery code",
+          !JSON.stringify(record).includes(recoveryCode.replace(/-/g, "")));
+    check("there are two ways in and no more",
+          record.locks.length === 2
+          && same(record.locks.map(l => l.kind).sort(), ["passphrase", "recovery"]),
+          record.locks.map(l => l.kind).join(","));
+    check("each way in has its own salt",
+          !same(record.locks[0].salt, record.locks[1].salt));
+
+    const sealed = await V.seal(key, "a3f9c1d2", { name: "Kitchen" });
+    check("a sealed value gives nothing away",
+          !new TextDecoder().decode(new Uint8Array(sealed.body)).includes("Kitchen"));
+    check("and comes back out the same",
+          same(await V.open(key, "a3f9c1d2", sealed), { name: "Kitchen" }));
+
+    const twice = await V.seal(key, "a3f9c1d2", { name: "Kitchen" });
+    check("sealing the same thing twice never repeats the iv",
+          !same(sealed.iv, twice.iv),
+          "reusing one with the same key is the one unrecoverable mistake");
+    check("and so never produces the same ciphertext",
+          !same(new Uint8Array(sealed.body), new Uint8Array(twice.body)));
+
+    check("it will not open under a different profile's id",
+          (await refusedWith(() => V.open(key, "bbbbbbbb", sealed))).length > 0);
+
+    const bent = new Uint8Array(sealed.body.slice(0));
+    bent[2] ^= 1;
+    check("one flipped bit is refused rather than half read",
+          (await refusedWith(
+            () => V.open(key, "a3f9c1d2", { iv: sealed.iv, body: bent.buffer })))
+          .length > 0);
+
+    const opened = await V.unlock(record, "a passphrase");
+    check("the passphrase opens it", opened.usedKind === "passphrase");
+    check("and the key it gives back opens what the first one sealed",
+          same(await V.open(opened.key, "a3f9c1d2", sealed), { name: "Kitchen" }));
+    check("the recovery code opens it too",
+          (await V.unlock(record, recoveryCode)).usedKind === "recovery");
+
+    let kind = "";
+    try {
+      await V.unlock(record, "nearly the passphrase");
+    } catch (error) {
+      kind = error.name;
+    }
+    check("a wrong secret is refused, and says so in its own words",
+          kind === "WrongSecret", kind);
+  } catch (error) {
+    check("the vault checks ran to the end", false,
+          `${error?.message ?? error}\n${error?.stack ?? ""}`);
   }
 
   return results;

@@ -127,7 +127,76 @@ That is covered rather than merely small, but it is there. An IndexedDB
 transaction commits whole or not at all, so the same three steps here have no
 gap between them at all.
 
-### Checking it
+## The passphrase
+
+`vault.js` can put a lock over all of it. With one set up, what sits in
+IndexedDB is ciphertext, and there is no way to read it without the passphrase
+or the recovery code.
+
+Be clear about what that is and is not. It is a lock on data at rest in one
+browser, and it stops somebody who sits down at an unlocked laptop or copies
+the browser profile off a disk. **It is not a login.** Nothing checks who you
+are, because there is nobody to check against. The passphrase is not sent
+anywhere and is not compared to anything: it either derives a key that opens
+the data or it does not. And it is no protection at all against something that
+controls the machine or the page, which sees the profiles after they are
+unlocked exactly as you do.
+
+### Why now, when nobody is using it
+
+Because it is free today and never will be again. Adding encryption to a save
+format people already have data in means a migration, tested against every
+shape of old file, getting it right the first time on machines you cannot see.
+Adding it before anyone has a profile costs nothing.
+
+### How it is put together
+
+A random 256-bit content key encrypts every record. That key never comes from
+the passphrase. The passphrase derives a second key, and that second key wraps
+the content key, which is stored wrapped.
+
+The indirection earns its place three times. Changing the passphrase rewraps 32
+bytes instead of re-encrypting every profile, backup and snapshot, and a change
+that can half-finish is a change that can lose data. The recovery code is just
+a second wrap of the same key rather than a second copy of everything. And a
+server-held wrap, the day there is a server, is a third entry in the same list,
+with the profiles still unreadable to that server.
+
+Key derivation is PBKDF2-HMAC-SHA256 at 600,000 iterations, which is what
+[OWASP's password storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+calls for. Argon2id would be better and is not in the Web Crypto API, so having
+it would mean a WebAssembly build, a build step and a dependency, to protect a
+local database. Not worth it here. Worth revisiting the day a server is holding
+everybody's.
+
+Records are AES-GCM with a fresh random IV every single write, and the profile
+id goes in as additional authenticated data so a record cannot be slid into
+another profile's slot.
+
+### What is still in the clear
+
+Profile ids, because they are the keys records are filed under and you cannot
+look up what you cannot name. How many profiles there are. When each was last
+saved and which days have snapshots. Somebody reading the raw database learns
+that you have four profiles and used the app on the 12th. They do not learn a
+single room, container or item.
+
+Exports are plain JSON too, deliberately, even with a lock on. That file is
+what opens in the desktop app and it is the backup that outlives the browser,
+and an export nobody else can read is not a backup, it is a second thing to
+lose the key to. It does mean an export is as safe as wherever it is put, which
+the interface has to say at the moment somebody presses the button.
+
+### There is no password reset
+
+There cannot be. A reset means somebody, somewhere, can get in without the
+password, and the entire point is that nobody can. Lose the passphrase and the
+recovery code and the data is gone.
+
+Which is why setting a lock hands back a recovery code, once, and why the
+interface has to make people write it down rather than mentioning it politely.
+
+## Checking it
 
 ```
 node --import fake-indexeddb/auto web/storage_run.mjs
@@ -137,11 +206,23 @@ The first time, `npm install --no-save fake-indexeddb` puts the stand-in in
 place. Nothing the app ships depends on it, `node_modules` is ignored by git,
 and deleting it costs one command to get back.
 
+171 checks: the model, the lock, and the saving twice over, once plain and once
+with a passphrase across the database. Not two sets of checks, the same set,
+because that is the claim encryption has to earn. Backups still happen daily, a
+wrecked record is still rescued from the same places in the same order, the
+launcher still sorts the same way. If any of the fifty behaved differently with
+a lock on, the lock would be in the wrong place.
+
 A stand-in is not the real thing, so the same checks run in `dev.html` against
 the real IndexedDB, and that is the run that counts. They live in one file,
-`storage_checks.js`, so there is no second copy to keep in step. The database
-they use is called `invenfloor-checks` and is wiped before and after, so
-running them can never touch real profiles.
+`storage_checks.js`, so there is no second copy to keep in step. The databases
+they use are wiped before and after, so running them can never touch real
+profiles.
+
+Running them in a real browser has already paid for itself. Two of the vault
+checks passed in node and failed in Chrome, because Web Crypto rejects with an
+exception whose message is an empty string there and a full sentence in node.
+The code was right and the check was asking the wrong question.
 
 These are ordinary tests rather than a parity harness, and that is worth being
 honest about: I wrote the code and I wrote the tests, so a misunderstanding in
@@ -152,9 +233,13 @@ move out of the way before the next save, or did the next save bury the backup
 it was rescued from. Every one of those is a sequence of writes with a wrong
 answer at the end, and that is exactly what a test can pin down.
 
-Each of the fifty was then checked by breaking `storage.js` on purpose,
-fourteen different ways, and making sure the checks noticed. A check that
-passes on broken code is not a check.
+They were then checked by breaking `storage.js` and `vault.js` on purpose,
+twenty-four different ways, and making sure the checks noticed. A check that
+passes on broken code is not a check. Two of the twenty-four earned their keep
+immediately: one found dead code, and one found a real bug, where taking a
+passphrase back off would have written null over any record that would not
+decrypt. Unreadable is not the same as worthless, and those records are the
+only copy of something somebody may still want picked apart by hand.
 
 ### One gap, on the desktop side
 
@@ -182,3 +267,20 @@ and needs maintaining, and nothing here needs one.
 
 Rough sizes, from the Python: about 2,000 lines of model and storage, and
 somewhere north of 8,000 of interface. The part underneath is now done.
+
+## And the thing after that, which is a decision rather than a task
+
+There is still no server, so there are still no accounts. One browser, one
+device, one set of profiles, and the only way to move them is a file.
+
+That is fine for one person and it is not fine for a business with three staff
+and a tablet at the counter, which is what a POS integration implies. Real
+accounts mean a server, a database, password hashing, sessions, email
+verification, a bill, and somebody responsible for the whole thing when it
+breaks at 9pm on a Saturday. That is a bigger step than anything in this folder
+so far, and it is worth taking deliberately rather than drifting into.
+
+What was built here does not go to waste when that day comes. The wrapping
+design already has room for a third key holder, so the sync-everything version
+can hold ciphertext it cannot read. That is a good position to be in, and it is
+much easier to keep than to retrofit.
