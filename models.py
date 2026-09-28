@@ -148,18 +148,53 @@ def copy_name(original, taken):
     The result respects the same length cap as a typed name, so a duplicate of
     a name that is already at the limit does not quietly exceed it.
     """
+    return _unique_name(original, taken,
+                        lambda n: " copy" if n == 1 else f" copy {n}")
+
+
+def imported_name(original, taken):
+    """"Kitchen" becomes "Kitchen (imported)", then "Kitchen (imported 2)".
+
+    Not copy_name, though it does the same job, because "copy" would be a lie
+    and a misleading one. A profile brought in from another machine is not a
+    duplicate of the one sitting here: it has its own history, and one of the
+    two is about to be deleted once their owner has worked out which. Looking
+    at the two cards a week later, "imported" says which is which and "copy"
+    does not.
+    """
+    return _unique_name(
+        original, taken,
+        lambda n: " (imported)" if n == 1 else f" (imported {n})")
+
+
+def _unique_name(original, taken, suffix_for):
+    """The shared half of copy_name and imported_name.
+
+    One function rather than two nearly identical ones, because the part
+    worth getting right is the trimming, and the way two copies of a rule
+    like that go wrong is one of them being fixed.
+
+    The count is bounded, and not because anybody is going to have a thousand
+    rooms called "Kitchen". It is because the only way out of this loop is
+    finding a free name, and that stops being guaranteed the moment the
+    suffix no longer fits inside the length cap: every attempt then trims to
+    the same string, which is taken, forever. Nobody will ever reach the
+    fallback. Somebody lowering NAME_MAX_LENGTH one day should get an ugly
+    name out of this rather than a frozen program.
+    """
     taken = {str(name).strip().lower() for name in taken}
 
-    attempt = 1
-    while True:
-        suffix = " copy" if attempt == 1 else f" copy {attempt}"
+    for attempt in range(1, 1000):
+        suffix = suffix_for(attempt)
         # Trim the ORIGINAL, not the suffix, so the part that makes the name
         # unique is the part that always survives.
-        room_for_base = NAME_MAX_LENGTH - len(suffix)
+        room_for_base = max(0, NAME_MAX_LENGTH - len(suffix))
         candidate = original.strip()[:room_for_base].strip() + suffix
         if candidate.lower() not in taken:
             return candidate
-        attempt += 1
+
+    tail = " " + new_id()[:6]
+    return original.strip()[:max(0, NAME_MAX_LENGTH - len(tail))].strip() + tail
 
 
 def duplicate(thing, name=None):

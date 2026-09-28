@@ -324,33 +324,52 @@ def draw_room(painter, points, color, wall_height=WALL_HEIGHT):
 
 
 # ---------------------------------------------------------------------------
-# WHERE A WALL GOES IN THE DRAW ORDER
+# DRAW ORDER
 # ---------------------------------------------------------------------------
 #
-# Boxes are drawn far to near by the depth of their far corner, which is the
-# note at the top of this file. Walls have to go in the same ordering, and it
-# is worth writing down why the same simple rule is enough for them, because
-# it does not look like it should be.
+# Painter's algorithm: draw the far things first and let the near things paint
+# over them. Everything here describes a thing by its FOOTPRINT, the
+# (x0, y0, x1, y1) it covers on the floor. A wall's footprint is flat, zero
+# wide in one direction, which is fine because nothing divides by it.
 #
-# A wall runs the whole length of a side of a room. It is nearer the camera
-# than some of what shares the room with it and further than the rest, so you
-# cannot say "this wall is at depth N" and have that mean much.
+# THE OBVIOUS VERSION DOES NOT WORK, AND IT TAKES A WHILE TO SEE WHY
+# ------------------------------------------------------------------
+# Give everything one number and sort by it. The number people reach for is
+# the depth of a corner, x + y, and either corner you pick is wrong:
 #
-# But the only orderings that MATTER are the ones where something is entirely
-# in front of something else, because those are the ones you can see go
-# wrong. And there the rule falls out:
+#   The FAR corner breaks on walls. A wall runs the whole length of a side of
+#   a room, so it is nearer the camera than some of what shares the room with
+#   it and further than the rest, and no single number says where it belongs.
 #
-#     if a wall is entirely in front of a box, then the wall's NEAR end is
-#     beyond the box's near corner -- and the wall's FAR end is beyond the
-#     box's far corner too, because a wall's far end is behind its near one.
+#   Cutting the wall into short pieces, so that each piece gets its own
+#   number, looks like the fix and swaps one failure for another: a piece
+#   three quarters of the way along the back wall now has a big depth, and a
+#   container sitting in the far corner has a small one, so the wall is drawn
+#   over the container it stands behind.
 #
-# So sorting by the far end already puts that wall after that box. The same
-# argument runs the other way for a box in front of a wall. Cases where the
-# two interleave in depth have no correct answer with flat polygons anyway.
+#   The NEAR corner breaks on wide objects. A shelf 400 long against the back
+#   wall has a near corner further forward than a small bin standing in front
+#   of it, so the shelf is drawn last and covers the bin.
 #
-# Everything here describes a thing by its FOOTPRINT: the (x0, y0, x1, y1) it
-# covers on the floor. A wall's footprint is flat, zero wide in one
-# direction, which is fine because nothing divides by it.
+# Both were tried. Both produced a picture that was right in the room it was
+# tested in and wrong in the next one.
+#
+# WHAT IS ACTUALLY TRUE
+# ---------------------
+# "Behind" is not a number, it is a relation between two things, and for
+# footprints on a floor seen down the x + y diagonal it is exact:
+#
+#     A is behind B if A ends before B starts in x, or in y.
+#
+# One axis is enough. If A is entirely at smaller x then every part of A is
+# further from the camera than the part of B beside it, whatever their sizes.
+# If neither holds in either axis the two overlap on the floor, which
+# containers do not do and walls cannot, and then it does not matter.
+#
+# That relation is a graph, and drawing order is a topological sort of it.
+# Which sounds heavier than it is: a room has a handful of walls and a handful
+# of containers, so this is a few hundred comparisons for a whole frame, and
+# it is correct rather than correct-so-far.
 
 def box_footprint(x, y, w, d):
     return (x, y, x + w, y + d)
@@ -363,8 +382,110 @@ def wall_footprint(wall):
 
 
 def footprint_depth(footprint):
-    """How far the furthest corner of a footprint is from the camera."""
+    """How far the furthest corner of a footprint is from the camera.
+
+    Not the draw order on its own, see above. It is the tie-break inside it,
+    for the pairs the relation has no opinion about.
+    """
     return depth(footprint[0], footprint[1])
+
+
+def behind(a, b):
+    """-1 if A is behind B, 1 if B is behind A, 0 if it makes no difference.
+
+    The comparisons are "less than or equal" on purpose. A container pushed
+    flush against a wall shares an edge with it, and a wall is always behind
+    what stands against it.
+
+    BOTH CAN LOOK TRUE AT ONCE, AND THEN NEITHER IS
+    Take a bin at (120..180, 100..140) and a shelf at (227..317, 28..48). The
+    bin ends before the shelf starts in x, so the bin is behind. The shelf
+    ends before the bin starts in y, so the shelf is behind. Read either rule
+    on its own and it is a contradiction, and a contradiction in here is a
+    cycle in the draw order, which the sort then has to break by guessing.
+
+    They are not contradicting each other. They are sitting diagonally apart,
+    and neither one hides any part of the other, so there is no right answer
+    and none is needed. The projection says so outright: screen x is
+    (x - y) * cos30, so if A ends before B starts in x AND B ends before A
+    starts in y, then
+
+        A's rightmost point = A.x1 - A.y0 <= B.x0 - B.y1 = B's leftmost point
+
+    and the two do not share a single column of the screen. Height cannot
+    bring them together either, because a box grows upward, never sideways.
+
+    So when both directions come out true, the answer is neither.
+    """
+    a_first = a[2] <= b[0] or a[3] <= b[1]
+    b_first = b[2] <= a[0] or b[3] <= a[1]
+    if a_first and b_first:
+        return 0
+    if a_first:
+        return -1
+    if b_first:
+        return 1
+    return 0
+
+
+def paint_order(things):
+    """Order things so nothing is drawn before something it stands behind.
+
+    Takes and returns whatever you give it, as long as each entry is a
+    (footprint, ...) tuple. Kahn's algorithm: repeatedly take something with
+    nothing left that has to come before it, preferring whichever of those is
+    furthest away so that the result is stable and looks like the naive order
+    wherever the relation does not care.
+
+    A cycle, three things each behind the next, is the oldest hole in the
+    painter's algorithm and the one thing a topological sort cannot answer.
+    The relation looks unable to make one now that behind() returns nothing
+    for a diagonal pair: it is antisymmetric, no cycle survives an exhaustive
+    search of every footprint on a small grid, and none turned up in six
+    hundred thousand random scenes. Looks unable is not the same as proven
+    unable, so the loop below still handles it, by taking the furthest thing
+    still waiting and carrying on. The picture would be slightly wrong rather
+    than missing a piece or spinning forever.
+    """
+    count = len(things)
+    afterwards = [[] for _ in range(count)]
+    waiting_on = [0] * count
+
+    for a in range(count):
+        for b in range(a + 1, count):
+            order = behind(things[a][0], things[b][0])
+            if order == 0:
+                continue
+            first, second = (a, b) if order < 0 else (b, a)
+            afterwards[first].append(second)
+            waiting_on[second] += 1
+
+    depths = [footprint_depth(thing[0]) for thing in things]
+    # A list rather than a set, and the reason is not style. Ties on depth are
+    # broken by whichever comes first here, so this has to be walked in the
+    # order the caller handed things over, every time, on every machine. Set
+    # iteration order is not something to lean on for that, and the browser
+    # port has to make the same picture out of the same room.
+    left = list(range(count))
+    ordered = []
+
+    while left:
+        pick = -1
+        for at in left:
+            if waiting_on[at] > 0:
+                continue
+            if pick < 0 or depths[at] < depths[pick]:
+                pick = at
+        if pick < 0:
+            # A cycle. Take the furthest thing still waiting and move on.
+            for at in left:
+                if pick < 0 or depths[at] < depths[pick]:
+                    pick = at
+        left.remove(pick)
+        ordered.append(things[pick])
+        for following in afterwards[pick]:
+            waiting_on[following] -= 1
+    return ordered
 
 
 def label(painter, point, text, color, size, bold=True, width=200):

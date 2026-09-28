@@ -36,13 +36,14 @@ same function the PDF export uses and the same RoomItems the canvas draws. A
 room that looks one way on the canvas looks that way here.
 """
 
+import os
 from datetime import datetime
 
 from PySide6.QtCore import QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel,
-    QScrollArea, QMenu, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QFrame, QLabel,
+    QMessageBox, QScrollArea, QMenu, QSizePolicy,
 )
 
 import floor_items
@@ -660,6 +661,17 @@ class ProfileScreen(QWidget):
         self._backups_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row.addWidget(self._backups_button, 0, Qt.AlignTop)
 
+        # The other half of the Backups button. A folder full of save files is
+        # only a safety net if there is a way back in from it, and there was
+        # not: the app read the folder it wrote to and nothing else. So a save
+        # file from a second machine, or a backup from last Tuesday, could be
+        # looked at and not opened.
+        self._import_button = button("Import", "ghost", self._import_profile)
+        self._import_button.setToolTip(
+            "Open a profile saved somewhere else, or an older backup")
+        self._import_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row.addWidget(self._import_button, 0, Qt.AlignTop)
+
         # A real button up here as well as the dashed card below, because the
         # card moves: with nine profiles it is off at the bottom of the grid,
         # and this one never is.
@@ -679,6 +691,44 @@ class ProfileScreen(QWidget):
         """
         QDesktopServices.openUrl(
             QUrl.fromLocalFile(storage.backups_folder()))
+
+    def _import_profile(self):
+        """Pick a profile file from anywhere and add it to this machine.
+
+        The dialog starts in the backups folder, because the likeliest file
+        anyone wants is one of their own from a few days ago, and it is the
+        one folder they would never find by hand on a packaged build.
+
+        Nothing is written over, ever. storage.import_profile handles that,
+        and this only has to say what happened afterwards, including when the
+        profile arrived under a different name than the one on the card in
+        front of them.
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open a profile file", storage.backups_folder(),
+            "Invenfloor profiles (*.json);;All files (*)")
+        if not path:
+            return
+
+        try:
+            profile = storage.import_profile(path, self.profiles)
+        except storage.CannotImport as problem:
+            QMessageBox.warning(self, "Could not import that file",
+                                str(problem))
+            return
+
+        self.reload()
+
+        # Saying the name back is not a flourish. If it collided with
+        # something already here it was renamed on the way in, and somebody
+        # who is not told that will go looking for a card that says what their
+        # file said, not find it, and import the same file again.
+        QMessageBox.information(
+            self, "Imported",
+            f"Added as \"{profile.name}\".\n\nNothing already here was "
+            f"changed. If this is a second copy of a profile you already "
+            f"had, both are on the launcher now and you can delete whichever "
+            f"one you do not want.")
 
     def _subtitle_text(self):
         """A one-line census of everything, across all profiles."""
@@ -700,33 +750,41 @@ class ProfileScreen(QWidget):
         updating one card, but it is far harder to get wrong -- the screen can
         never drift out of step with what is on disk.
         """
-        self.profiles, recoveries = storage.load_profiles_and_recoveries()
-        self._show_recoveries(recoveries)
+        self.profiles, recoveries, refusals = storage.load_profiles_and_problems()
+        self._show_problems(recoveries, refusals)
         self._rebuild_list()
 
-    def _show_recoveries(self, recoveries):
-        """Say out loud that a save file was unreadable and what we did.
+    def _show_problems(self, recoveries, refusals):
+        """Say out loud what went wrong on the way in.
 
-        Worth being specific rather than reassuring. "Restored from the
-        backup from 2026-09-14" tells you how much work to expect to be
-        missing; "recovered successfully" tells you nothing and invites you
-        to assume everything is fine.
+        Worth being specific rather than reassuring. "Restored from the backup
+        from 2026-09-14" tells you how much work to expect to be missing;
+        "recovered successfully" tells you nothing and invites you to assume
+        everything is fine.
+
+        Refusals go first. A recovery has already happened and there is
+        nothing to decide; a refusal is a file sitting there unopened, waiting
+        for somebody to do something about it.
         """
-        if not recoveries:
+        if not recoveries and not refusals:
             self._notice.hide()
             return
 
         lines = []
+        for refusal in refusals:
+            name = short(refusal.profile_name, 40) or os.path.basename(refusal.path)
+            lines.append(f"{name} was NOT opened. {refusal.why}")
+
         for recovery in recoveries:
             lines.append(f"{short(recovery.profile_name, 40)} could not be "
                          f"read from its save file, so it was restored from "
                          f"{recovery.came_from}. Anything changed after that "
                          f"point is gone.")
-        lines.append("The unreadable file was kept, not deleted. Press "
-                     "Backups to see the folder.")
+        if recoveries:
+            lines.append("The unreadable file was kept, not deleted. Press "
+                         "Backups to see the folder.")
 
-        self._notice.setText(" ".join(lines) if len(lines) == 2
-                             else "\n\n".join(lines))
+        self._notice.setText("\n\n".join(lines))
         self._notice.show()
 
     def _rebuild_list(self):

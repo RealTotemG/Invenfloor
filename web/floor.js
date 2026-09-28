@@ -104,7 +104,7 @@ export function snap(value) {
 export class FloorView {
   constructor(canvas, {
     onChanged = () => {}, onSelected = () => {}, onFocused = () => {},
-    onModeChanged = () => {},
+    onModeChanged = () => {}, onDrawingChanged = () => {},
   } = {}) {
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
@@ -112,6 +112,11 @@ export class FloorView {
     this.onSelected = onSelected;
     this.onFocused = onFocused;
     this.onModeChanged = onModeChanged;
+    // Fires whenever a corner is placed or taken back, so a toolbar can show
+    // how many there are and whether the shape can be closed yet. Drawing a
+    // room with no idea how far through you are is the part of this that
+    // people give up on.
+    this.onDrawingChanged = onDrawingChanged;
 
     this.profile = null;
     this.floor = null;
@@ -177,9 +182,11 @@ export class FloorView {
   }
 
   setMode(mode, preset = null) {
+    const wasDrawing = this.cornersPlaced;
     this.mode = mode;
     this.preset = preset;
     this.drawing = null;
+    if (wasDrawing) this.onDrawingChanged(0);
     if (mode !== SELECT) this.select(null);
     this.onModeChanged(mode, preset);
     this.draw();
@@ -704,12 +711,40 @@ export class FloorView {
       }
     }
     this.drawing.points.push(point);
+    this.onDrawingChanged(this.drawing.points.length);
+    this.draw();
+  }
+
+  /** How many corners have been placed so far. Zero when not drawing. */
+  get cornersPlaced() {
+    return this.drawing?.points.length ?? 0;
+  }
+
+  /** Throw away a half-drawn room and go back to Select.
+   *
+   *  There is a keyboard way out of this, Escape, and a keyboard is not
+   *  something a phone has. A visible button is the only way somebody on a
+   *  phone gets out of a shape they have changed their mind about without
+   *  finishing it first and deleting it afterwards.
+   */
+  cancelDrawing() {
+    this.drawing = null;
+    this.onDrawingChanged(0);
+    this.setMode(SELECT);
+  }
+
+  /** Take back the last corner placed. */
+  undoLastCorner() {
+    if (!this.drawing?.points.length) return;
+    this.drawing.points.pop();
+    this.onDrawingChanged(this.drawing.points.length);
     this.draw();
   }
 
   finishDrawing() {
     const points = this.drawing?.points ?? [];
     this.drawing = null;
+    this.onDrawingChanged(0);
     if (points.length < 3) { this.draw(); return; }
 
     // Stored relative to the room's own origin, which is what the save format
@@ -1093,7 +1128,7 @@ export class FloorView {
     if (event.target instanceof HTMLInputElement) return;
     if (event.code === "Space") { this.spaceHeld = true; return; }
     if (event.key === "Escape") {
-      if (this.drawing) { this.drawing = null; this.setMode(SELECT); return; }
+      if (this.drawing) { this.cancelDrawing(); return; }
       if (this.mode !== SELECT) { this.setMode(SELECT); return; }
       if (this.focused) { this.stepInto(null); return; }
       this.select(null);
@@ -1102,6 +1137,10 @@ export class FloorView {
     if (event.key === "Enter" && this.drawing) {
       this.finishDrawing();
       return;
+    }
+    if ((event.key === "Backspace" || event.key === "Delete") && this.drawing) {
+      event.preventDefault();
+      this.undoLastCorner();
     }
   }
 

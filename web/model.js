@@ -911,6 +911,300 @@ export class Profile {
     }
     return null;
   }
+
+  /** Turn a list of tag ids into real Tags.
+   *
+   *  Ids that no longer exist are skipped, so deleting a tag can never leave
+   *  a room or an item pointing at nothing.
+   */
+  tagsFor(tagIds) {
+    return tagIds.map(id => this.tagById(id)).filter(Boolean);
+  }
+
+  /** [floor, room, container], or [null, null, null] if it is gone. */
+  findContainer(containerId) {
+    return this.whereIs(containerId) ?? [null, null, null];
+  }
+
+  findRoom(roomId) {
+    for (const [floor, room] of this.allRooms()) {
+      if (room.id === roomId) return [floor, room];
+    }
+    return [null, null];
+  }
+
+  /** "Ground Floor / Kitchen / Top drawer", or null if it is gone. */
+  containerPath(containerId) {
+    const [floor, room, container] = this.findContainer(containerId);
+    if (!container) return null;
+    return `${floor.name} / ${room.name} / ${container.name}`;
+  }
+
+  // -- where an item is -----------------------------------------------------
+
+  /** Every place this item is kept, as [floor, room, container, quantity, tier].
+   *
+   *  Placements whose container has been deleted are skipped, so this can be
+   *  shorter than item.placements.
+   */
+  locationsOf(item) {
+    const found = [];
+    for (const placement of item.placements) {
+      const [floor, room, container] = this.findContainer(placement.containerId);
+      if (container) {
+        found.push([floor, room, container, placement.quantity, placement.tier]);
+      }
+    }
+    return found;
+  }
+
+  /** A short line saying where an item lives.
+   *
+   *  One place gets the full path; several get a count, because three full
+   *  paths on one row is unreadable. The items screen expands to show them.
+   */
+  locationOf(item) {
+    const places = this.locationsOf(item);
+    if (!places.length) return "Unfiled";
+    if (places.length === 1) {
+      const [floor, room, container, , tier] = places[0];
+      return `${floor.name} / ${room.name} / ${container.name}`
+             + (tier ? ` · Tier ${tier}` : "");
+    }
+    return `${places.length} places`;
+  }
+
+  /** What is in one container, as [item, quantity, tier].
+   *
+   *  One row per PLACEMENT rather than per item, because a thing can sit on
+   *  two tiers of the same shelf and both are worth showing. Sorted by tier,
+   *  so whatever is loose in the container comes first and then tier 1
+   *  downward.
+   *
+   *  Pass no tier for everything, or a number for one tier, including 0 for
+   *  the part of the container that has no tier.
+   */
+  contentsOf(containerId, tier = null) {
+    const found = [];
+    for (const item of this.items) {
+      for (const placement of item.placementsIn(containerId)) {
+        if (tier === null || placement.tier === tier) {
+          found.push([item, placement.quantity, placement.tier]);
+        }
+      }
+    }
+    found.sort((a, b) => a[2] - b[2]
+      || a[0].name.toLowerCase().localeCompare(b[0].name.toLowerCase()));
+    return found;
+  }
+
+  /** How many DIFFERENT items are in a container, not how many units.
+   *
+   *  Counted by item, so a thing kept on two tiers of one shelf is still one
+   *  thing in that shelf.
+   */
+  itemCountInContainer(containerId) {
+    return new Set(this.contentsOf(containerId).map(([item]) => item.id)).size;
+  }
+
+  /** Every distinct item with at least one placement in this room.
+   *
+   *  An item kept in two drawers of the same room is counted once: the
+   *  question is "what is in here", not "how many boxes".
+   */
+  itemsInRoom(room) {
+    const ids = new Set(room.containers.map(container => container.id));
+    return this.items.filter(item =>
+      item.placements.some(placement => ids.has(placement.containerId)));
+  }
+
+  unfiledItems() { return this.items.filter(item => item.isUnfiled()); }
+
+  /** Everything below its par level. */
+  lowItems() { return this.items.filter(item => item.isLow()); }
+
+  itemsWithTag(tagId) {
+    return this.items.filter(item => item.tagIds.includes(tagId));
+  }
+
+  /** Which rooms carry this tag, as [floor, room].
+   *
+   *  The other half of the tag idea: a tag on an ITEM says what the thing is,
+   *  and the same tag on a ROOM says where things like that are supposed to
+   *  live. Comparing the two is how you spot something filed in the wrong
+   *  place.
+   */
+  *roomsWithTag(tagId) {
+    for (const [floor, room] of this.allRooms()) {
+      if (room.tagIds.includes(tagId)) yield [floor, room];
+    }
+  }
+
+  /** Items sitting somewhere their own tags say they should not be.
+   *
+   *  If an item is tagged Tools, some room is tagged Tools, and the item is
+   *  in none of those rooms, it is probably in the wrong place.
+   *
+   *  Two deliberate exclusions. If no room carries the tag at all there is no
+   *  expectation to break, so there is nothing to report. And unfiled items
+   *  are not misfiled: they are not anywhere yet, which is a different
+   *  problem with its own view.
+   *
+   *  Returns [item, tag, expectedRooms] so a screen can say exactly why each
+   *  entry is listed.
+   */
+  misfiledItems() {
+    const reports = [];
+    for (const item of this.items) {
+      const places = this.locationsOf(item);
+      if (!places.length) continue;
+      const roomsItIsIn = places.map(([, room]) => room);
+
+      for (const tagId of item.tagIds) {
+        const expected = [...this.roomsWithTag(tagId)].map(([, room]) => room);
+        if (!expected.length) continue;
+        if (!roomsItIsIn.some(room => room.tagIds.includes(tagId))) {
+          reports.push([item, this.tagById(tagId), expected]);
+        }
+      }
+    }
+    return reports;
+  }
+
+  /** Newest first. ISO timestamps sort correctly as plain strings. */
+  recentItems(limit = null) {
+    const ordered = [...this.items].sort((a, b) =>
+      a.createdAt < b.createdAt ? 1 : (a.createdAt > b.createdAt ? -1 : 0));
+    return limit ? ordered.slice(0, limit) : ordered;
+  }
+
+  // -- changing things ------------------------------------------------------
+
+  /** Put, or update, a quantity of an item in a container, on a tier.
+   *
+   *  A quantity of zero or less removes the placement, which is what makes
+   *  "I have used them all up" the same gesture as "wrong drawer".
+   *
+   *  Matches on container AND tier, so putting shoes on tier 3 does not
+   *  overwrite the shoes already on tier 1.
+   */
+  setPlacement(item, containerId, quantity, tier = 0) {
+    const existing = item.placementIn(containerId, tier);
+
+    if (quantity <= 0) {
+      if (existing) {
+        item.placements = item.placements.filter(each => each !== existing);
+      }
+      return;
+    }
+    if (!existing) item.placements.push(new Placement(containerId, quantity, tier));
+    else existing.quantity = quantity;
+  }
+
+  /** Move some of an item from one tier of a container to another.
+   *
+   *  Takes a quantity rather than moving the whole pile, because a shelf's
+   *  whole point is that four of a thing can be on one level and two on
+   *  another. Moving part of a stack leaves the rest where it was.
+   *
+   *  The destination is added to, never replaced: two already on tier 3 plus
+   *  two moved there is four.
+   */
+  moveToTier(item, containerId, fromTier, toTier, quantity) {
+    const source = item.placementIn(containerId, fromTier);
+    if (!source || toTier === fromTier) return;
+
+    const moving = Math.min(Math.max(Math.trunc(quantity) || 0, 0), source.quantity);
+    if (moving <= 0) return;
+
+    source.quantity -= moving;
+    if (source.quantity <= 0) {
+      item.placements = item.placements.filter(each => each !== source);
+    }
+
+    const destination = item.placementIn(containerId, toTier);
+    if (!destination) item.placements.push(new Placement(containerId, moving, toTier));
+    else destination.quantity += moving;
+
+    item.touch();
+  }
+
+  /** Change how many tiers a container has.
+   *
+   *  Removing tiers throws nothing away. Items on a tier that no longer
+   *  exists come back to the container itself, which is the honest answer:
+   *  you still own them and they are still in that cupboard, you just stopped
+   *  dividing it up.
+   */
+  setTierCount(container, count) {
+    const tiers = Math.max(Math.trunc(count) || 0, 0);
+    container.tierCount = tiers;
+    for (const item of this.items) {
+      for (const placement of item.placementsIn(container.id)) {
+        if (placement.tier > tiers) placement.tier = 0;
+      }
+    }
+  }
+
+  /** Remove a tag, and strip it from everything that referenced it.
+   *
+   *  Cleaning up references at the moment of deletion is what stops a save
+   *  file slowly filling with ids pointing at things that are not there.
+   */
+  deleteTag(tagId) {
+    this.tags = this.tags.filter(tag => tag.id !== tagId);
+    const strip = holder => {
+      holder.tagIds = holder.tagIds.filter(id => id !== tagId);
+    };
+    this.items.forEach(strip);
+    for (const [, room] of this.allRooms()) {
+      strip(room);
+      room.containers.forEach(strip);
+    }
+  }
+
+  /** Remove a container. Items keep their other places.
+   *
+   *  Deleting a drawer should not delete the record of what was in it: you
+   *  almost certainly still own those things. An item kept only there becomes
+   *  unfiled; one kept elsewhere too is untouched apart from losing that one
+   *  placement.
+   */
+  deleteContainer(containerId) {
+    for (const [, room] of this.allRooms()) {
+      room.containers = room.containers.filter(each => each.id !== containerId);
+    }
+    for (const item of this.items) {
+      item.placements = item.placements.filter(
+        placement => placement.containerId !== containerId);
+    }
+  }
+
+  /** Remove a room, and every placement inside its containers. */
+  deleteRoom(roomId) {
+    for (const floor of this.floors) {
+      for (const room of [...floor.rooms]) {
+        if (room.id !== roomId) continue;
+        for (const container of [...room.containers]) {
+          this.deleteContainer(container.id);
+        }
+        floor.rooms = floor.rooms.filter(each => each !== room);
+      }
+    }
+  }
+
+  deleteFloor(floorId) {
+    for (const floor of [...this.floors]) {
+      if (floor.id !== floorId) continue;
+      for (const room of [...floor.rooms]) this.deleteRoom(room.id);
+      this.floors = this.floors.filter(each => each !== floor);
+    }
+  }
+
+  /** Where this floor sits in the stack. 0 is the lowest. */
+  floorIndex(floor) {
+    return this.floors.findIndex(candidate => candidate.id === floor.id);
+  }
 }
 
 /** A deep copy of a room or container with brand new ids.

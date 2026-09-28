@@ -176,6 +176,10 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
     <p class="tally busy" id="floorTally">the floor plan: running…</p>
     <ul class="checks" id="floorChecks"></ul>
   </div>
+  <div class="panel">
+    <p class="tally busy" id="itemsTally">items and tiers: running…</p>
+    <ul class="checks" id="itemsChecks"></ul>
+  </div>
 
   <h2>5. What is saved in this browser</h2>
   <p class="note">
@@ -195,8 +199,8 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
     <li class="done"><s>Storage.</s> Done, and checked above.</li>
     <li class="done"><s>The room view.</s> Done. It is in the app next door.</li>
     <li class="done"><s>The floor plan canvas.</s> Done, and checked above.</li>
-    <li><b>The items screen</b>, and somewhere to see the ones that are not in
-        any container.</li>
+    <li class="done"><s>The items screen.</s> Done, and checked above.</li>
+    <li><b>Tags</b>, which the model has and no screen here shows yet.</li>
   </ul>
   <p class="note">
     One thing the desktop app is missing, now that saves can travel: it has no
@@ -211,6 +215,7 @@ import * as M from "./model.js";
 import * as S from "./storage.js";
 import { runStorageChecks, runVaultChecks } from "./storage_checks.js";
 import { runFloorChecks } from "./floor_checks.js";
+import { runItemsChecks } from "./items_checks.js";
 
 const escape = text => String(text).replace(/[<>&]/g,
   c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
@@ -466,6 +471,7 @@ runInto("lockedTally", "lockedChecks", "saving, with a passphrase over it",
         () => runStorageChecks("invenfloor-checks-locked",
                                { passphrase: "a checking passphrase" }));
 runInto("floorTally", "floorChecks", "the floor plan", () => runFloorChecks());
+runInto("itemsTally", "itemsChecks", "items and tiers", () => runItemsChecks());
 
 // ---------------------------------------------------------------------------
 // 4. What is in the real store

@@ -245,25 +245,7 @@ class RoomView3D(QWidget):
         points = [(px, py) for px, py in self.room.points]
         iso.draw_floor(painter, points, self.room.color)
 
-        # Walls and containers go in ONE list and are ordered together.
-        #
-        # The walls used to all be drawn first, on the reasoning that a wall
-        # is behind the room it encloses. That holds for a rectangle. It does
-        # not hold for an L: the back wall of the L's foot stands in FRONT of
-        # anything in the L's other arm, and drawing it first left a cabinet
-        # sitting on top of a wall it was standing behind.
-        # The second number is the tie-break, and walls win ties on purpose.
-        # Equal depth means a container is pushed flush into the corner the
-        # wall starts from, and a wall is always behind what stands against
-        # it.
-        pieces = (
-            [(iso.footprint_depth(iso.wall_footprint(wall)), 0, "wall", wall)
-             for wall in iso.far_walls(points)]
-            + [(iso.depth(c.x, c.y), 1, "box", c)
-               for c in self.room.containers])
-        pieces.sort(key=lambda piece: (piece[0], piece[1]))
-
-        for _, _, kind, thing in pieces:
+        for _, kind, thing in self._layers(points):
             if kind == "wall":
                 iso.draw_wall(painter, thing[0], thing[1], self.room.color)
                 continue
@@ -281,6 +263,38 @@ class RoomView3D(QWidget):
             self._draw_add_preview(painter)
 
         painter.end()
+
+    def _layers(self, points=None):
+        """Everything in the room, back to front, as (footprint, kind, thing).
+
+        Walls and containers go in ONE list and are ordered together.
+
+        The walls used to all be drawn first, on the reasoning that a wall is
+        behind the room it encloses. That holds for a rectangle. It does not
+        hold for an L: the back wall of the L's foot stands in FRONT of
+        anything in the L's other arm, and drawing it first left a cabinet
+        sitting on top of a wall it was standing behind.
+
+        Sorting them together by one depth number was the next try, and it is
+        wrong too, for reasons worth reading once: see the long note above
+        paint_order in iso.py. Walls are listed first so they win the ties,
+        which is what you want when a container is pushed flush into a corner.
+
+        One method rather than two because clicking has to agree with drawing.
+        Working the order out twice is how they end up disagreeing, and then
+        the box you click is not the box on top.
+        """
+        if self.room is None:
+            return []
+        if points is None:
+            points = [(px, py) for px, py in self.room.points]
+
+        pieces = (
+            [(iso.wall_footprint(wall), "wall", wall)
+             for wall in iso.far_walls(points)]
+            + [(iso.box_footprint(c.x, c.y, c.w, c.h), "box", c)
+               for c in self.room.containers])
+        return iso.paint_order(pieces)
 
     def _draw_box_label(self, painter, container):
         """A container's name and count, floating clear above it.
@@ -410,15 +424,15 @@ class RoomView3D(QWidget):
     def container_at(self, point):
         """Which container is under a widget position, nearest first.
 
-        Walked near to far, the opposite of the draw order, because the thing
-        drawn last is the thing on top and so the thing you meant to click.
+        Tested against the silhouette rather than the footprint, and walked in
+        reverse draw order, because the thing drawn last is the thing on top
+        and so the thing you meant to click.
         """
         if self.room is None:
             return None
 
-        for container in sorted(self.room.containers,
-                                key=lambda c: iso.depth(c.x, c.y),
-                                reverse=True):
+        boxes = [thing for _, kind, thing in self._layers() if kind == "box"]
+        for container in reversed(boxes):
             if self._silhouette(container).containsPoint(point,
                                                          Qt.OddEvenFill):
                 return container

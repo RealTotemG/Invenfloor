@@ -69,14 +69,22 @@ export function sample() {
   const [top] = closet.containers;
 
   profile.items = [
+    // Deliberately spread across the tiers of the racking, including one
+    // thing on two of them at once, because that is the case the contents
+    // panel and the shelf marks both have to get right.
     item("Socket set", "#4f7cff", [[shelving.id, 1, 2]]),
     item("Motor oil", "#f0a726", [[shelving.id, 4, 1]]),
     item("Extension cords", "#33d6a0", [[shelving.id, 3, 3], [bench.id, 1, 0]]),
+    item("Zip ties", "#a78bfa", [[shelving.id, 2, 1], [shelving.id, 6, 4]]),
+    item("Rags", "#94a3b8", [[shelving.id, 5, 0]]),
     item("Wood screws", "#94a3b8", [[bench.id, 6, 0]]),
     item("Exterior white", "#f2555a", [[paint.id, 2, 1]]),
     item("Paint rollers", "#a78bfa", [[paint.id, 5, 2]]),
     item("Tinned tomatoes", "#84cc16", [[pantry.id, 12, 2]]),
     item("Pasta", "#facc15", [[pantry.id, 8, 3]]),
+    item("Olive oil", "#fb923c", [[pantry.id, 2, 1]]),
+    // Below its par level, so the "running low" filter has something in it.
+    item("Coffee", "#e879f9", [[pantry.id, 1, 4]], 6),
     item("Spare bulbs", "#fb923c", [[top.id, 6, 1]]),
     // One with nowhere to live, so the "not in any container" line has
     // something to count and does not go untested.
@@ -89,9 +97,9 @@ export function sample() {
   return M.Profile.fromDict(profile.toDict());
 }
 
-function item(name, color, placements) {
+function item(name, color, placements, minQuantity = 0) {
   return new M.Item({
-    name, color,
+    name, color, minQuantity,
     placements: placements.map(
       ([containerId, quantity, tier]) => new M.Placement(containerId, quantity, tier)),
   });

@@ -229,6 +229,8 @@ def main():
                           "reloaded": M.Profile.from_dict(
                               json.loads(json.dumps(profile.to_dict()))).to_dict()}
 
+    profile_cases(cases)
+
     # The old single-container item format.
     cases["olditem"] = []
     for raw in [{"id": "i2", "name": "Old", "container_id": "cX", "quantity": 7},
@@ -252,6 +254,193 @@ def main():
     print(f"{total} cases", file=sys.stderr)
 
 
+def a_house():
+    """A profile with enough going on to ask real questions of.
+
+    Two floors, four rooms, tagged rooms and tagged items, something on two
+    tiers of one shelf, something in two rooms at once, something unfiled,
+    something below its par level, and something tagged for a room it is not
+    in. Every one of those is a branch in the methods below.
+    """
+    profile = M.Profile(id="p1", name="House", color="#4f7cff")
+    tools = M.Tag(id="t-tools", name="Tools", color="#f0a726")
+    food = M.Tag(id="t-food", name="Food", color="#84cc16")
+    profile.tags = [tools, food]
+
+    ground = M.Floor(id="f1", name="Ground")
+    upstairs = M.Floor(id="f2", name="Upstairs")
+
+    garage = M.Room(id="r1", name="Garage", points=M.l_shape_points(420, 320),
+                    tag_ids=["t-tools"])
+    garage.containers = [
+        M.Container(id="c1", name="Racking", x=10, y=10, w=150, h=45,
+                    height=100, tier_count=4, tag_ids=["t-tools"]),
+        M.Container(id="c2", name="Bench", x=10, y=240, w=190, h=60, height=40),
+    ]
+    kitchen = M.Room(id="r2", name="Kitchen", x=480,
+                     points=M.rectangle_points(340, 260), tag_ids=["t-food"])
+    kitchen.containers = [
+        M.Container(id="c3", name="Pantry", x=20, y=20, w=120, h=50,
+                    height=120, tier_count=3),
+    ]
+    empty = M.Room(id="r3", name="Empty", y=400, points=M.rectangle_points(100, 100))
+    closet = M.Room(id="r4", name="Closet", points=M.rectangle_points(180, 140))
+    closet.containers = [
+        M.Container(id="c4", name="Top shelf", x=15, y=15, w=140, h=40,
+                    height=75, tier_count=2),
+    ]
+
+    ground.rooms = [garage, kitchen, empty]
+    upstairs.rooms = [closet]
+    profile.floors = [ground, upstairs]
+
+    def item(item_id, name, places, **rest):
+        made = M.Item(id=item_id, name=name,
+                      created_at=f"2026-01-{int(item_id[1:]):02d}T00:00:00",
+                      **rest)
+        made.placements = [M.Placement(*place) for place in places]
+        return made
+
+    profile.items = [
+        # On two tiers of the same shelf, which is what contents_of is for.
+        item("i1", "Sockets", [("c1", 4, 1), ("c1", 2, 3)], tag_ids=["t-tools"]),
+        # In two rooms at once.
+        item("i2", "Tape", [("c1", 1, 0), ("c3", 2, 0)], tag_ids=["t-tools"]),
+        # Tagged Food, kept in the Garage, and some room carries Food. Misfiled.
+        item("i3", "Tinned beans", [("c1", 6, 2)], tag_ids=["t-food"]),
+        # Below its par level.
+        item("i4", "Screws", [("c2", 3, 0)], min_quantity=10, tag_ids=["t-tools"]),
+        # Nowhere at all.
+        item("i5", "Beach umbrella", []),
+        # Pointing at a container that does not exist any more, AND tagged.
+        # This is the one misfiled_items has to skip: its placements list is
+        # not empty, but none of them lead anywhere, so it is not sitting in
+        # the wrong room, it is sitting nowhere. A mutation that dropped that
+        # guard went unnoticed until this item was tagged.
+        item("i6", "Ghost", [("c-gone", 2, 0)], tag_ids=["t-food"]),
+        # Unfiled and tagged, which is the same trap from the other side.
+        item("i9", "Still in the car", [], tag_ids=["t-tools"]),
+        # On a tier past the end of its container, which set_tier_count makes.
+        item("i7", "Bulbs", [("c4", 5, 2)]),
+        # Tagged for a room it IS in, so not misfiled.
+        item("i8", "Pasta", [("c3", 9, 1)], tag_ids=["t-food"]),
+    ]
+    return profile
+
+
+def profile_cases(cases):
+    """Everything Profile can be asked or told, answered by the Python.
+
+    Objects come out as ids and names rather than whole records: what is being
+    compared is which thing was picked, not a second copy of to_dict, which is
+    already checked to death above.
+    """
+    def named(thing):
+        return None if thing is None else [thing.id, thing.name]
+
+    def places(found):
+        return [[named(floor), named(room), named(box), quantity, tier]
+                for floor, room, box, quantity, tier in found]
+
+    profile = a_house()
+    cases["profile"] = {
+        "dict": profile.to_dict(),
+        "tags_for": [profile.tags_for(ids) and [t.id for t in profile.tags_for(ids)]
+                     for ids in [[], ["t-tools"], ["t-food", "t-tools"],
+                                 ["t-gone"], ["t-tools", "t-gone"]]],
+        "find_container": {box: [named(part) for part in profile.find_container(box)]
+                           for box in ["c1", "c3", "c4", "c-gone", ""]},
+        "find_room": {room: [named(part) for part in profile.find_room(room)]
+                      for room in ["r1", "r4", "r-gone"]},
+        "container_path": {box: profile.container_path(box)
+                           for box in ["c1", "c3", "c4", "c-gone"]},
+        "locations_of": {item.id: places(profile.locations_of(item))
+                         for item in profile.items},
+        "location_of": {item.id: profile.location_of(item) for item in profile.items},
+        "contents_of": {box: [[i.id, q, t] for i, q, t in profile.contents_of(box)]
+                        for box in ["c1", "c2", "c3", "c4", "c-gone"]},
+        "contents_of_tier": [[box, tier,
+                              [[i.id, q, t] for i, q, t in profile.contents_of(box, tier)]]
+                             for box in ["c1", "c4"] for tier in [0, 1, 2, 3, 9]],
+        "item_count_in_container": {box: profile.item_count_in_container(box)
+                                    for box in ["c1", "c2", "c3", "c4", "c-gone"]},
+        "items_in_room": {room.id: [i.id for i in profile.items_in_room(room)]
+                          for floor in profile.floors for room in floor.rooms},
+        "unfiled_items": [i.id for i in profile.unfiled_items()],
+        "low_items": [i.id for i in profile.low_items()],
+        "items_with_tag": {tag: [i.id for i in profile.items_with_tag(tag)]
+                           for tag in ["t-tools", "t-food", "t-gone"]},
+        "rooms_with_tag": {tag: [[named(f), named(r)]
+                                 for f, r in profile.rooms_with_tag(tag)]
+                           for tag in ["t-tools", "t-food", "t-gone"]},
+        "misfiled_items": [[i.id, named(tag), [r.id for r in rooms]]
+                           for i, tag, rooms in profile.misfiled_items()],
+        "recent_items": [i.id for i in profile.recent_items()],
+        "recent_items_3": [i.id for i in profile.recent_items(3)],
+        "floor_index": [profile.floor_index(f) for f in profile.floors]
+                       + [profile.floor_index(M.Floor(id="nope"))],
+    }
+
+    # The mutations, each from a fresh house so one cannot see the last one's
+    # leftovers. The whole profile comes back, because what matters about a
+    # delete is as much what it did NOT touch.
+    cases["profile_changes"] = []
+
+    def change(label, apply):
+        fresh = a_house()
+        apply(fresh)
+        cases["profile_changes"].append({"label": label, "answer": fresh.to_dict()})
+
+    def find(profile, item_id):
+        return next(i for i in profile.items if i.id == item_id)
+
+    change("set_placement new", lambda p: p.set_placement(find(p, "i5"), "c2", 3, 1))
+    change("set_placement update", lambda p: p.set_placement(find(p, "i1"), "c1", 9, 1))
+    change("set_placement other tier",
+           lambda p: p.set_placement(find(p, "i1"), "c1", 7, 2))
+    change("set_placement zero removes",
+           lambda p: p.set_placement(find(p, "i1"), "c1", 0, 1))
+    change("set_placement negative removes",
+           lambda p: p.set_placement(find(p, "i4"), "c2", -5, 0))
+    change("set_placement zero on nothing",
+           lambda p: p.set_placement(find(p, "i5"), "c1", 0, 0))
+
+    change("move_to_tier part",
+           lambda p: p.move_to_tier(find(p, "i3"), "c1", 2, 1, 2))
+    change("move_to_tier all",
+           lambda p: p.move_to_tier(find(p, "i3"), "c1", 2, 1, 6))
+    change("move_to_tier more than there is",
+           lambda p: p.move_to_tier(find(p, "i3"), "c1", 2, 1, 99))
+    change("move_to_tier onto an occupied one",
+           lambda p: p.move_to_tier(find(p, "i1"), "c1", 3, 1, 2))
+    change("move_to_tier to loose",
+           lambda p: p.move_to_tier(find(p, "i1"), "c1", 1, 0, 4))
+    change("move_to_tier nowhere",
+           lambda p: p.move_to_tier(find(p, "i1"), "c1", 1, 1, 2))
+    change("move_to_tier from an empty tier",
+           lambda p: p.move_to_tier(find(p, "i1"), "c1", 2, 1, 1))
+    change("move_to_tier zero",
+           lambda p: p.move_to_tier(find(p, "i1"), "c1", 1, 2, 0))
+
+    change("set_tier_count up",
+           lambda p: p.set_tier_count(p.floors[0].rooms[0].containers[0], 6))
+    change("set_tier_count down",
+           lambda p: p.set_tier_count(p.floors[0].rooms[0].containers[0], 2))
+    change("set_tier_count to none",
+           lambda p: p.set_tier_count(p.floors[0].rooms[0].containers[0], 0))
+    change("set_tier_count negative",
+           lambda p: p.set_tier_count(p.floors[1].rooms[0].containers[0], -3))
+
+    change("delete_tag", lambda p: p.delete_tag("t-tools"))
+    change("delete_tag that is not there", lambda p: p.delete_tag("t-gone"))
+    change("delete_container", lambda p: p.delete_container("c1"))
+    change("delete_container that is not there", lambda p: p.delete_container("c-gone"))
+    change("delete_room", lambda p: p.delete_room("r1"))
+    change("delete_room with nothing in it", lambda p: p.delete_room("r3"))
+    change("delete_floor", lambda p: p.delete_floor("f1"))
+    change("delete_floor the last one", lambda p: p.delete_floor("f2"))
+
+
 def point(qpoint):
     return [qpoint.x(), qpoint.y()]
 
@@ -262,6 +451,37 @@ def shape(qpolygon):
 
 def rect(qrect):
     return [qrect.x(), qrect.y(), qrect.width(), qrect.height()]
+
+
+def draw_order(corners, walls):
+    """The scene room_view_3d.py paints, named piece by piece, back to front.
+
+    Six boxes and the room's far walls, ordered by iso.paint_order, reported as
+    a list of names. Names rather than coordinates because the names are what
+    the two programs have to agree on: the same pieces, in the same sequence.
+
+    The boxes go through nearest_fit, the way every path that moves a container
+    does, so they land inside the room instead of lying across a wall. That is
+    not to make the check easy. It is the only arrangement that can occur, and
+    holding the code to a scene it can never be given proves nothing.
+    """
+    # Named by index, not by coordinates. A wall at x 10 prints as "10" in
+    # JavaScript and "10.0" in Python, and a name that disagrees would fail
+    # this check for a reason that has nothing to do with the draw order. The
+    # two lists of walls are already known to match: far_walls is checked
+    # against its own case just above.
+    things = [(I.wall_footprint(wall), f"wall {n}")
+              for n, wall in enumerate(walls)]
+
+    x0 = min(px for px, _ in corners)
+    y0 = min(py for _, py in corners)
+    room = M.Room(id="r", name="r", points=[list(c) for c in corners])
+    for n in range(6):
+        x, y, w, h = M.nearest_fit(room, x0 + n * 37, y0 + ((n * 53) % 140),
+                                   40 + n * 9, 30)
+        things.append((I.box_footprint(x, y, w, h), f"box {n}"))
+
+    return [name for _, name in I.paint_order(things)]
 
 
 def iso_cases(cases, rng):
@@ -335,6 +555,7 @@ def iso_cases(cases, rng):
                 # the top off a full-height cabinet.
                 "bounds_empty": rect(I.room_bounds(corners, I.WALL_HEIGHT, 0.0)),
                 "bounds_tall": rect(I.room_bounds(corners, I.WALL_HEIGHT, 90.0)),
+                "order": draw_order(corners, walls),
             })
 
     cases["color"] = []

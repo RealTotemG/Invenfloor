@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Invenfloor</title>
+<meta name="description" content="Draw your floor plan, put shelves in it, and
+      find where things are. Everything stays in your own browser.">
+
+<!--
+  The front door, and the reason it exists is GitHub Pages.
+
+  Pages will serve the root of a branch or a /docs folder, and nothing else.
+  The app lives in web/, which is neither, so something at the root has to
+  point at it. That could have been three lines of meta refresh.
+
+  It is a page instead because of who follows the link. Somebody being asked
+  to try this arrives knowing nothing, quite possibly on a phone, from a
+  message that said "have a look at this". A bare redirect gives them an app
+  with no idea what it is for or whether it is about to want their email
+  address. A paragraph costs nothing and answers both.
+
+  Styles are inline rather than shared with the app: this page has to work
+  before anything else has loaded, and it is the page somebody sees if the
+  rest of the site is broken.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --panel: #161a21;
+    --text: #e6e9ef;
+    --muted: #9aa4b2;
+    --accent: #4f7cff;
+    --border: #262c36;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 20px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 34rem; margin: 0 auto; }
+  h1 { font-size: 2rem; margin: 0 0 .25em; letter-spacing: -.02em; }
+  .tagline { color: var(--muted); margin: 0 0 2rem; }
+  p { margin: 0 0 1rem; }
+  .muted { color: var(--muted); font-size: .94rem; }
+  .go {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    padding: .8em 1.6em;
+    border-radius: 10px;
+    margin: .5rem 0 2rem;
+  }
+  .go:hover { filter: brightness(1.1); }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem 1.4rem;
+    margin-bottom: 1rem;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  a { color: var(--accent); }
+  footer { color: var(--muted); font-size: .86rem; margin-top: 2.5rem; }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Invenfloor</h1>
+  <p class="tagline">Draw your floor plan, put shelves in it, and find where
+  things are.</p>
+
+  <a class="go" href="web/">Open it</a>
+
+  <div class="card">
+    <h2>Nothing you put in it leaves your device</h2>
+    <p class="muted">There is no account and no server. What you draw is saved
+    by your own browser, on the machine you drew it on, and you can put a
+    passphrase over it. Clearing your site data clears it, so there is a
+    Download button on every profile for keeping a copy.</p>
+  </div>
+
+  <div class="card">
+    <h2>It is being tested, so it will have rough edges</h2>
+    <p class="muted">If something goes wrong, the bottom of the app has a
+    "Something wrong?" button that writes out which browser you are on and
+    whether the page was able to save anything. Send that over with what you
+    were doing and it is usually enough to find the problem.</p>
+  </div>
+
+  <footer>
+    There is a desktop version for Windows as well, with more in it.
+    <a href="https://github.com/RealTotemG/Invenfloor">The code is on GitHub.</a>
+  </footer>
+
+</main>
+</body>
+</html>

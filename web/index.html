@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>Invenfloor</title>
+<meta name="description" content="Draw your floor plan, put shelves in it, and
+      find where things are. Everything stays in your own browser.">
 <link rel="stylesheet" href="app.css">
 
 <!--
@@ -17,12 +19,13 @@
   the console says "CORS policy" and has nothing to do with the code.
 
   In VS Code: install the Live Server extension, right-click this file and
-  choose "Open with Live Server".
+  choose "Open with Live Server". Or put the folder on GitHub Pages, which is
+  what the README next door explains.
 
-  What is here: the launcher, and the inside of a room. There is no way to
-  draw a new floor plan yet, so a profile gets here by being exported from the
-  desktop app and imported below. dev.html next door is the workbench that
-  checks the pieces underneath this.
+  Every path in here and in the scripts is relative, so this works the same
+  served from the root of a domain or from a folder inside one.
+
+  dev.html next door is the workbench that checks the pieces underneath this.
 -->
 </head>
 <body>
@@ -31,9 +34,44 @@
   <!-- Every screen lives in here and is built by app.js. The markup is this
        short on purpose: one place that puts elements on the page beats markup
        here and more of it in the script, which is how a page ends up with two
-       ideas about what it currently shows. -->
+       ideas about what it currently shows.
+
+       What is inside it now is what somebody sees while the scripts load, and
+       for good if they never do. A blank page gives a visitor nothing to do
+       and gives you nothing to go on, so it says which of the two likely
+       reasons it is. -->
+  <noscript>
+    <div class="pad"><div class="limit">
+      <h1>Invenfloor</h1>
+      <p class="note">This page is the whole program, so it needs JavaScript
+      switched on. Nothing is sent anywhere either way: everything you make
+      here is saved in your own browser and never uploaded.</p>
+    </div></div>
+  </noscript>
 </div>
 
 <script type="module" src="app.js"></script>
+
+<script>
+// If the module above never runs, the page sits there empty and a visitor has
+// no way to tell a broken link from an old browser. ES modules are ignored
+// outright by browsers that do not support them, and a network or path
+// problem fails just as quietly, so this waits a moment and then says so.
+//
+// Deliberately not a module itself: it has to run in exactly the browsers
+// that would not run the one above.
+setTimeout(function () {
+  var app = document.getElementById("app");
+  if (app.querySelector(".screen") || app.querySelector(".bar")) return;
+  app.innerHTML =
+    '<div class="pad"><div class="limit">' +
+    '<h1>Invenfloor</h1>' +
+    '<p class="note">This did not start. Two things cause that almost every ' +
+    'time: a browser more than a few years old, or the page having been ' +
+    'opened straight off a disk instead of from a web address. Trying it in ' +
+    'an up-to-date Chrome, Firefox, Safari or Edge fixes most of it.</p>' +
+    '</div></div>';
+}, 8000);
+</script>
 </body>
 </html>

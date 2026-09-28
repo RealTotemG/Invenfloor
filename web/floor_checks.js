@@ -406,6 +406,45 @@ export async function runFloorChecks() {
             it.floor.rooms.length === 1 && it.view.mode === F.SELECT);
     }
 
+    // Escape is the keyboard way out, and a phone has no keyboard. These are
+    // the ones the buttons under the toolbar call.
+    {
+      let announced = [];
+      const made = bench();
+      benches.push(made.holder);
+      const world = madeUp();
+      const view = new F.FloorView(made.canvas, {
+        onDrawingChanged: placed => announced.push(placed),
+      });
+      view.show(world.profile, world.floor);
+      view.setMode(F.DRAW);
+
+      for (const [x, y] of [[600, 100], [900, 100], [900, 400]]) {
+        const at = view.toScreen(x, y);
+        press(made.canvas, at.x, at.y); lift(made.canvas, at.x, at.y);
+      }
+      check("the view says how many corners have gone down",
+            view.cornersPlaced === 3 && same(announced, [1, 2, 3]),
+            `${view.cornersPlaced} placed, announced ${announced}`);
+
+      view.undoLastCorner();
+      check("taking back a corner takes back exactly one",
+            view.cornersPlaced === 2 && announced[announced.length - 1] === 2,
+            `${view.cornersPlaced} left`);
+
+      view.cancelDrawing();
+      check("cancelling throws the shape away and goes back to Select",
+            view.cornersPlaced === 0 && view.mode === F.SELECT
+            && world.floor.rooms.length === 1,
+            `${world.floor.rooms.length} rooms, mode ${view.mode}`);
+      check("and it says so, so a toolbar can put its buttons away",
+            announced[announced.length - 1] === 0, String(announced));
+
+      view.undoLastCorner();
+      check("taking back a corner when there is none is harmless",
+            view.cornersPlaced === 0);
+    }
+
     for (const [name, corners] of [["Rectangle", 4], ["Triangle", 3],
                                    ["Circle", 20], ["L-shape", 6]]) {
       const it = fresh(view => view.setMode(F.SHAPE, name));

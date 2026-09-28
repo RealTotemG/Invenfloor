@@ -56,17 +56,28 @@ button.danger:hover { background: var(--danger); color: #fff; border-color: var(
 button.small { padding: 5px 10px; min-height: 30px; font-size: var(--size-sm); }
 button:disabled { opacity: .45; cursor: default; }
 
-input[type=text], input[type=password], input[type=number] {
+input[type=text], input[type=password], input[type=number],
+input[type=search], select {
   font: inherit;
   background: var(--bg-input);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  /* Flex items will not shrink below the width of their own content, and an
-     input's content width comes from its size attribute. Without these, one
-     text box pushes a whole panel sideways on a phone. */
   min-width: 0;
+  width: 100%;
+}
+
+/* Flex items will not shrink below the width of their own content, and an
+   input's content width comes from its size attribute, so one text box can
+   push a whole panel sideways on a phone. The cure is `width: 0` plus
+   `flex: 1 1 0`, and it belongs ONLY inside a row.
+   Applied to every input everywhere, which is what this used to do, it
+   collapses any box in a COLUMN to a square the size of its padding, because
+   there the flex basis is the width. Every name and notes box on the items
+   screen was an unusable stub. */
+.row > input[type=text], .row > input[type=password],
+.row > input[type=number], .row > input[type=search], .row > select {
   flex: 1 1 0;
   width: 0;
 }
@@ -282,4 +293,167 @@ button.icon {
     border-left: 1px solid var(--border);
     max-height: none;
   }
+}
+
+/* -- tools that say what they are ------------------------------------------ */
+
+/* A picture and a word, side by side. Both, because a picture alone needs
+   learning and a word alone is a wall of text on a toolbar. */
+button.tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+button.tool.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+button.tool .icon { flex: none; opacity: .85; }
+button.tool.on .icon { opacity: 1; color: var(--accent-hover); }
+button .icon { flex: none; }
+button.icon-only { padding: 7px 9px; min-width: 36px; }
+
+/* The word at the left of a strip saying what the strip is for. */
+.strip-label {
+  color: var(--text-faint);
+  font-size: var(--size-sm);
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  flex: none;
+  align-self: center;
+  padding-right: 2px;
+}
+
+/* The line under the toolbar that says what to do next. The one thing on the
+   screen that can answer "what happens if I press the canvas now". */
+.chips.hint {
+  background: var(--bg-app);
+  align-items: center;
+  gap: var(--space-sm);
+  overflow-x: visible;
+  flex-wrap: wrap;
+}
+.chips.hint .icon { color: var(--accent); opacity: .7; }
+.chips.hint .grow { white-space: normal; min-width: 0; }
+
+.chips.places { background: var(--bg-panel); }
+
+.row.between { justify-content: space-between; }
+
+/* -- lists of things ------------------------------------------------------- */
+
+.rows { display: flex; flex-direction: column; gap: var(--space-xs); }
+
+.listing {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.listing.open { border-color: var(--accent); }
+.listing-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 10px var(--space-md);
+  font-weight: 400;
+}
+.listing-head:hover { background: var(--bg-hover); }
+.listing-body {
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.listing-body h4 {
+  margin: var(--space-sm) 0 0;
+  font-size: var(--size);
+  color: var(--text-muted);
+}
+
+/* -- tiers ----------------------------------------------------------------- */
+
+.tier-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: var(--space-sm) 0 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.tier-pick {
+  font: inherit;
+  font-size: var(--size-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  flex: none;
+  /* Wide enough for "Tier 10" AND the arrow the browser draws inside the box.
+     Sized to the longest entry it can hold rather than the longest it usually
+     holds, because a dropdown that clips its own text reads "Tier" and that
+     is worse than either. */
+  min-width: 7.2em;
+}
+.qty-box {
+  font: inherit;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 6px;
+  width: 4.2em;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.tier-controls {
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+}
+
+
+/* ---------------------------------------------------------------------------
+   THE FOOTER, AND THE PROBLEM REPORT
+   --------------------------------------------------------------------------- */
+
+.about {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Not .code, which is the recovery code: green, spaced out and meant to be
+   read aloud. This is a wall of diagnostics somebody is about to paste
+   somewhere, so it wants to look like what it is and get out of the way. */
+.report {
+  font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
+  font-size: var(--size-sm);
+  line-height: 1.5;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+  /* It wraps rather than scrolling sideways, because a user agent string is
+     long and nobody scrolls a textarea to check what they are about to send. */
+  white-space: pre-wrap;
+  word-break: break-word;
 }

@@ -305,10 +305,33 @@ export function footprintDepth(footprint) {
  *  The comparisons are "less than or equal" on purpose. A container pushed
  *  flush against a wall shares an edge with it, and a wall is always behind
  *  what stands against it.
+ *
+ *  BOTH CAN LOOK TRUE AT ONCE, AND THEN NEITHER IS
+ *  Take a bin at (120..180, 100..140) and a shelf at (227..317, 28..48). The
+ *  bin ends before the shelf starts in x, so the bin is behind. The shelf
+ *  ends before the bin starts in y, so the shelf is behind. Read either rule
+ *  on its own and it is a contradiction, and a contradiction in here is a
+ *  cycle in the draw order, which the sort then has to break by guessing.
+ *
+ *  They are not contradicting each other. They are sitting diagonally apart,
+ *  and neither one hides any part of the other, so there is no right answer
+ *  and none is needed. The projection says so outright: screen x is
+ *  (x - y) * cos30, so if A ends before B starts in x AND B ends before A
+ *  starts in y, then
+ *
+ *      A's rightmost point = A.x1 - A.y0 <= B.x0 - B.y1 = B's leftmost point
+ *
+ *  and the two do not share a single column of the screen. Height cannot
+ *  bring them together either, because a box grows upward, never sideways.
+ *
+ *  So when both directions come out true, the answer is neither.
  */
 export function behind(a, b) {
-  if (a[2] <= b[0] || a[3] <= b[1]) return -1;
-  if (b[2] <= a[0] || b[3] <= a[1]) return 1;
+  const aFirst = a[2] <= b[0] || a[3] <= b[1];
+  const bFirst = b[2] <= a[0] || b[3] <= a[1];
+  if (aFirst && bFirst) return 0;
+  if (aFirst) return -1;
+  if (bFirst) return 1;
   return 0;
 }
 
@@ -320,12 +343,15 @@ export function behind(a, b) {
  *  so that the result is stable and looks like the naive order wherever the
  *  relation does not care.
  *
- *  A cycle is possible in principle, three objects each behind the next, and
- *  is what the painter's algorithm has never been able to do without cutting
- *  things up. Nothing in a room makes one, because containers do not overlap
- *  and walls are on the outside of everything. If one turns up anyway the loop
- *  below takes the furthest remaining thing and carries on, so the picture is
- *  slightly wrong rather than missing.
+ *  A cycle, three things each behind the next, is the oldest hole in the
+ *  painter's algorithm and the one thing a topological sort cannot answer.
+ *  The relation looks unable to make one now that behind() returns nothing for
+ *  a diagonal pair: it is antisymmetric, no cycle survives an exhaustive
+ *  search of every footprint on a small grid, and none turned up in six
+ *  hundred thousand random scenes. Looks unable is not the same as proven
+ *  unable, so the loop below still handles it, by taking the furthest thing
+ *  still waiting and carrying on. The picture would be slightly wrong rather
+ *  than missing a piece or spinning forever.
  */
 export function paintOrder(things) {
   const count = things.length;

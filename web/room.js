@@ -288,8 +288,76 @@ export class RoomView {
       }
     }
 
+    this.drawTierContents(container);
+
     if (container.id === this.selectedId) {
       this.fill(iso.boxOutline(x, y, w, d, height), null, T.ACCENT, 2.4);
+    }
+  }
+
+  /** What is on each shelf, as a row of colored marks along the tier line.
+   *
+   *  The reason tiers are worth having at all. A number in a panel saying
+   *  "4 tiers" tells you the shelf is divided up; seeing the sockets sitting
+   *  on the second one tells you where to reach. One mark per item on that
+   *  tier, in the item's own color, so a shelf you have seen once is
+   *  recognisable from across the room.
+   *
+   *  Loose things, the ones on no tier at all, are drawn along the bottom
+   *  edge. They are not on a shelf and pretending they are on the first one
+   *  would be a lie about the only thing this drawing is for.
+   */
+  drawTierContents(container) {
+    if (!this.profile) return;
+    const { x, y, w, h: d, height } = container;
+    const ctx = this.context;
+    if (height < 12 || w < 24) return;    // no room to draw anything readable
+
+    const shelf = height / Math.max(container.tierCount, 1);
+    // Tall enough to see and short enough to sit under the shelf above.
+    const tall = Math.min(shelf * 0.55, height * 0.16, 9);
+    const inset = Math.min(w * 0.05, 4);
+
+    // Tier 0 first, so a container with no tiers at all still shows what is
+    // in it along its foot.
+    for (const tier of [0, ...container.tiers()]) {
+      const onIt = this.profile.contentsOf(container.id, tier);
+      if (!onIt.length) continue;
+
+      // Tier 1 is the lowest shelf, and things rest ON a shelf rather than
+      // hanging under it, so each row starts at its own shelf line and goes
+      // up. Loose things sit on the floor of the container.
+      const z = tier === 0 ? 0 : shelf * tier;
+      if (z + tall > height) continue;
+
+      // Sized to fill the width between them, so two things on a shelf are
+      // two wide blocks and six are six narrow ones. A fixed width looked
+      // like grit on the edge of the box at any real container size.
+      const across = w - inset * 2;
+      const step = across / onIt.length;
+      const wide = Math.max(step * 0.78, 1.5);
+
+      onIt.forEach(([item], at) => {
+        const left = x + inset + at * step;
+        // Against the near-left face, which is the brightest of the two you
+        // can see, so the marks read against it instead of disappearing into
+        // a shadowed side.
+        const corners = [
+          iso.project(left, y + d, z),
+          iso.project(left + wide, y + d, z),
+          iso.project(left + wide, y + d, z + tall),
+          iso.project(left, y + d, z + tall),
+        ];
+        ctx.beginPath();
+        corners.forEach((point, index) =>
+          index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
+        ctx.closePath();
+        ctx.fillStyle = iso.shade(item.color, 0.08);
+        ctx.fill();
+        ctx.strokeStyle = iso.shade(item.color, -0.35);
+        ctx.lineWidth = 0.8 / this.scale;
+        ctx.stroke();
+      });
     }
   }
 
@@ -308,11 +376,11 @@ export class RoomView {
                               container.height + (container.w + container.h) / 4 + 16);
     const at = this.toCanvas(above);
 
-    const filed = this.itemsIn(container);
-    const total = filed.reduce((sum, [, placement]) => sum + placement.quantity, 0);
-    const line = filed.length
-      ? `${container.name}  ·  ${total} in ${filed.length} item${
-          filed.length === 1 ? "" : "s"}`
+    const piles = this.itemsIn(container);
+    const total = piles.reduce((sum, [, quantity]) => sum + quantity, 0);
+    const kinds = new Set(piles.map(([item]) => item.id)).size;
+    const line = kinds
+      ? `${container.name}  ·  ${total} in ${kinds} thing${kinds === 1 ? "" : "s"}`
       : container.name;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -334,15 +402,15 @@ export class RoomView {
     ctx.fillText(line, at.x, at.y);
   }
 
-  /** Every item with something in this container, as [item, placement]. */
+  /** Every pile in this container, as [item, quantity, tier].
+   *
+   *  Profile.contentsOf rather than a walk of its own, so this and the panel
+   *  and the items screen all answer the question the same way. Three
+   *  different walks over the same placements is three chances to disagree
+   *  about what is in a drawer.
+   */
   itemsIn(container) {
-    const found = [];
-    for (const item of this.profile?.items ?? []) {
-      for (const placement of item.placements) {
-        if (placement.containerId === container.id) found.push([item, placement]);
-      }
-    }
-    return found;
+    return this.profile?.contentsOf(container.id) ?? [];
   }
 
   // -- picking things up ----------------------------------------------------

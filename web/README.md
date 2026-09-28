@@ -13,8 +13,12 @@ shoved by accident, dragging containers out inside a room and resizing them,
 tiers, heights, colors, duplicate, delete, and undo. A profile can start from
 nothing here now; it no longer has to come from the desktop app.
 
-What is not here yet is the items screen, and anywhere to see the items that
-are not in a container.
+There is an items screen too: everything in the catalog, searchable, saying
+where each thing lives and which shelf it is on, with tabs for the things that
+are not filed anywhere and the things that have dropped below the level you
+want to keep.
+
+What is not here yet is tags, which the model has and no screen shows.
 
 ## Running it
 
@@ -38,6 +42,63 @@ the answer is almost always the first red line in there.
 
 **Node.js** is only needed for the two harnesses below, not for viewing pages.
 `node --version` in a terminal says whether you have it.
+
+## Putting it somewhere other people can open
+
+GitHub Pages hosts this for nothing, and the reason it fits so well is the
+thing that also decides everything else in this folder: there is no server
+side. No accounts, no database, no request that leaves the page. Pages serves
+files and that is all this needs. Free, and there is no bill that can grow
+later because there is nothing running.
+
+Two files at the root of the repo make it work, and they are already there:
+
+- **`index.html`** at the root, which is the front door. Pages will serve the
+  root of a branch or a `/docs` folder and nothing else, and the app lives in
+  `web/`, which is neither, so something at the root has to point at it. It is
+  a page rather than three lines of redirect because of who follows the link:
+  somebody who knows nothing, probably on a phone, from a message that said
+  "have a look at this". A paragraph telling them what it is and that nothing
+  leaves their device costs nothing and is the difference between them trying
+  it and closing the tab.
+- **`.nojekyll`**, an empty file that tells Pages not to run the whole repo
+  through Jekyll first. Nothing here needs it, and without the file Pages
+  quietly ignores any folder whose name starts with an underscore, which is a
+  bad surprise to have waiting.
+
+Then, once:
+
+1. Push everything to `main`.
+2. On GitHub: **Settings**, then **Pages** in the left column.
+3. **Source**: Deploy from a branch. **Branch**: `main`, folder `/ (root)`.
+4. Save. The first build takes a minute or two.
+
+The address is **https://realtotemg.github.io/Invenfloor/**, and it is a
+different repo from `realtotemg.github.io`, so the portfolio site is untouched
+by any of this. Every push to `main` from then on republishes within a minute,
+so getting a fix to a tester is `git push` and nothing else.
+
+Serving from the root does mean the `.py` files are served too. They are
+already public in the repo, so nothing is revealed that was not, and nobody
+will ever ask for them.
+
+### Checking it before anybody else does
+
+Open the address on a phone, not just on the machine that pushed it. Phones
+are where this gets used and where a browser is most likely to be old.
+
+The app has to be reached from a real web address rather than a file on a
+disk, which is the same `file://` rule as above. If the page comes up empty,
+it says so after a few seconds instead of sitting blank, and `index.html` in
+this folder explains why in a comment.
+
+### When it should stop being Pages
+
+When somebody asks for their inventory on their phone AND their laptop. That
+is sync, sync needs somewhere to sync to, and that is the first thing here
+that genuinely needs a server. Until somebody asks, a server would cost money
+to run, put other people's inventories on a machine you are then responsible
+for backing up, and buy nothing they can see.
 
 ## Why the model came first
 
@@ -86,7 +147,7 @@ the kind of mistake that survives a review and turns up in a screenshot a week
 later. The palette goes through it as well, so `theme.js` and `theme.py`
 cannot quietly drift into slightly different shades of the same app.
 
-Currently 6,191 cases, all agreeing.
+Currently 6,285 cases, all agreeing.
 
 Run it after any change to either file. A divergence is a bug in one of them,
 and the harness does not care which.
@@ -221,7 +282,8 @@ The first time, `npm install --no-save fake-indexeddb` puts the stand-in in
 place. Nothing the app ships depends on it, `node_modules` is ignored by git,
 and deleting it costs one command to get back.
 
-171 checks: the model, the lock, and the saving twice over, once plain and once
+267 checks: the model, the lock, the saving twice over, the floor plan and
+the items screen, once plain and once
 with a passphrase across the database. Not two sets of checks, the same set,
 because that is the claim encryption has to earn. Backups still happen daily, a
 wrecked record is still rescued from the same places in the same order, the
@@ -271,6 +333,65 @@ small job and should happen before this is shown to anyone.
 Plain ES modules. Open the page and it runs. A bundler is a thing that breaks
 and needs maintaining, and nothing here needs one.
 
+## Saying what a button does
+
+A toolbar can only tell you what a button is CALLED. "Draw room" is not
+obvious until you have used it once, and neither is the difference between
+Resize and Reshape.
+
+So three things, and the third is the one that matters.
+
+Every tool has a **picture and a word**, not one or the other. The word is what
+tells you the first time; the picture is what you find it by every time after.
+And a tooltip on each, for a mouse.
+
+The tools are **grouped and labelled**. "Tool" over Select, Draw room and Add
+container. "Or start from a shape" over the five presets. Laid out identically,
+as they were, the presets read as five more tools rather than five ways to
+start the same one.
+
+And a **line under the toolbar that says what to do next**. Not what the button
+is called: what happens when you press the canvas, right now, with the tool you
+have picked. "Press to place each corner. Press the ringed first corner, or
+Enter, to close the room." "Drag a rectangle inside a room to make a container
+there." It changes with the tool, with the selection, and with how far through
+a shape you are, and it is the only thing on the screen that can answer the
+question somebody actually has.
+
+### Getting out of a half-drawn room
+
+Escape has always worked and a phone has no Escape. So while a room is being
+drawn the hint line carries two buttons: **Take back a corner**, which removes
+the last one, and **Cancel**, which throws the shape away. The line also counts
+the corners as they go down, so there is never a question of how far through
+you are, and the first corner grows a ring the moment there are enough to close
+the shape.
+
+## Tiers, and putting things on them
+
+A container can be divided into tiers, and a pile of something sits either on
+one of them or loose in the container itself. That is tier 0, and it is not a
+missing value: a bin with no shelves has everything loose in it, and so does
+the floor of a cupboard with three shelves above it.
+
+Tiers are not named or colored, on purpose. A shelf's levels do not have names,
+they have positions, and "Tier 2" already says everything there is to say.
+
+The panel for a container groups what is in it under a heading per tier, and
+every pile gets a dropdown to move it to another one. Moving a pile onto a tier
+that already has some of the same thing ADDS to it rather than replacing it,
+which is the difference between a shelf and a slot.
+
+Add tier and Remove tier are there too. Removing one throws nothing away:
+whatever was on it comes back loose in the container, because you still own it
+and it is still in that cupboard, you just stopped dividing the cupboard up.
+
+**And the 3D view draws them.** Each tier shows a block of color per thing
+sitting on it, in that thing's own color, along the face you are looking at.
+That is the whole reason tiers are worth having: a number in a panel saying
+"4 tiers" tells you the shelf is divided up, and seeing the sockets on the
+second one tells you where to reach.
+
 ## Two fingers are the camera
 
 The desktop app pans with the right mouse button, which a phone does not have.
@@ -283,6 +404,19 @@ expect there.
 A second finger arriving in the middle of a drag takes over, and whatever the
 first one was doing is abandoned rather than finished wherever the second
 finger happens to leave it.
+
+## Checking the screens
+
+`items_checks.js` drives the contents panel and the items screen the way a hand
+does: find the button, press it, then look at the profile. Thirty-seven checks,
+and the thing being checked is always the profile rather than the markup. What
+matters is that pressing + put one more sock on tier 3, not that the row has a
+particular class on it.
+
+Both are functions that fill an element, which is what makes them this easy to
+ask questions of. Sixteen deliberate breakages, all caught, after one gap was
+closed: the "put one somewhere" check used an item that was nowhere, so adding
+to a pile and replacing it looked identical.
 
 ## Checking a canvas
 
@@ -352,8 +486,8 @@ same twenty-five lines.
 
 ## What is next
 
-1. **The items screen**, and somewhere to see the ones not in any container.
-   It is the last piece the desktop app has and this does not.
+1. **Tags.** The model carries them, `misfiledItems` uses them to work out
+   what is in the wrong room, and no screen here shows or edits one yet.
 2. **The draw order fix, back in the Python**, per the section above.
 3. **An Import button on the desktop app**, per the gap above.
 

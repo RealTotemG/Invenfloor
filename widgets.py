@@ -238,14 +238,26 @@ def wrapped(text_label, grow=True):
     """Make a label wrap its text AND actually get the height to do it.
 
     setWordWrap(True) on its own is not enough, and this is a genuinely nasty
-    trap. A layout only asks a widget "how tall are you at this width?" if the
-    widget's size POLICY says it has an answer, and QLabel does not set that
-    flag for you. So the layout reserves one line, the text wraps onto two, and
-    the second line gets drawn outside the space reserved for it.
+    trap. The layout has to be willing to ASK "how tall are you at this
+    width?", and a vertical size policy of Fixed means it stops asking: the
+    label is given one line, the text wraps onto three, and lines two and
+    three are painted outside the space reserved for them.
 
-    On screen that looks like text being cut in half or overlapping whatever
-    sits underneath, which sends you hunting for a font or styling problem when
-    the real cause is three lines away in a layout.
+    On screen that looks like text cut in half or overlapping whatever sits
+    underneath, which sends you hunting for a font or styling problem when the
+    real cause is three lines away in a layout.
+
+    Worth being exact about what this does and does not fix, because it has
+    already been read the wrong way once. A bare QLabel with setWordWrap(True)
+    reports heightForWidth by itself in this version of Qt, and an ordinary
+    QVBoxLayout honors it, so that case is already fine. What this is for is
+    everything that overrides the policy afterwards: a Fixed height set for
+    some other reason, a layout that hands out sizeHints and nothing else, a
+    widget built by a helper that had its own ideas. Putting every wrapping
+    label through here means none of them can be quietly pinned to one line
+    later on.
+
+    fit_test.py measures this on every empty state in the app.
     """
     text_label.setWordWrap(True)
     policy = text_label.sizePolicy()
@@ -325,8 +337,16 @@ def empty_state(message, hint=""):
                               theme.SPACE_MD, theme.SPACE_LG)
     layout.setSpacing(theme.SPACE_SM)
 
+    # The message wraps for the same reason the hint below it does, and it is
+    # easy to think it does not need to. Most of these messages are three
+    # words. One of them is not: the Items screen puts what somebody typed
+    # into it, as 'Nothing matches "..."', and a real search term is long.
+    # Centered and unwrapped, that line runs off BOTH ends at once, so the one
+    # piece of information on the screen, what they actually searched for, is
+    # the part they cannot read.
     main = QLabel(message)
     main.setAlignment(Qt.AlignCenter)
+    wrapped(main)
     main.setStyleSheet(
         f"color: {theme.TEXT_MUTED}; font-size: {theme.FONT_SIZE}px;")
     layout.addWidget(main)

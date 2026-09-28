@@ -4,10 +4,10 @@
  *
  * The shell: what is on screen, and what happens when you press things.
  *
- * Two screens. The launcher lists the profiles saved in this browser and
+ * Three places. The launcher lists the profiles saved in this browser and
  * handles the passphrase and the import and export of files. Opening one gets
- * you the workspace: a floor plan you can draw rooms on, or the inside of one
- * room in 3D, with an inspector down the side for whatever is selected.
+ * you the workspace, which is either the floor plan, the inside of one room in
+ * 3D, or the items screen.
  *
  * WHY THE MARKUP IS BUILT HERE RATHER THAN SITTING IN THE HTML
  * ------------------------------------------------------------
@@ -15,6 +15,15 @@
  * hidden sections that get shown and hidden, means the current screen is
  * described in two places at once, and the day they disagree is the day you
  * get a launcher with half a floor plan behind it.
+ *
+ * TELLING PEOPLE WHAT A BUTTON DOES
+ * ---------------------------------
+ * Every tool has a picture, a word, and a tooltip, and the strip underneath
+ * says what the tool you have picked expects you to do next, in a sentence.
+ * That last part is the one that matters. A toolbar can only ever say what a
+ * button is called; the line under it can say "press to place each corner,
+ * press the first one again to close it", which is the thing somebody
+ * actually needs at that moment and cannot guess.
  *
  * WHAT SAVING LOOKS LIKE
  * ----------------------
@@ -31,59 +40,24 @@ import { RoomView } from "./room.js";
 import { FloorView } from "./floor.js";
 import { History } from "./undo.js";
 import { sample } from "./sample.js";
+import { contentsPanel, itemsScreen, tierName } from "./items.js";
+import {
+  el, put, clear, button, swatch, field, numberField, choose, colors, notice,
+  icon, toolButton,
+} from "./ui.js";
+import { footer, watchForErrors } from "./about.js";
 
 T.apply();
 
+// Installed before anything else so that a failure while the launcher is
+// still building is caught too. That is the failure somebody is most likely
+// to report, because it is the one where the page never appears.
+watchForErrors();
+
+// Where a problem report goes. One place, so moving the project is one edit.
+const ISSUES = "https://github.com/RealTotemG/Invenfloor/issues";
+
 const root = document.getElementById("app");
-
-// ---------------------------------------------------------------------------
-// MAKING ELEMENTS
-// ---------------------------------------------------------------------------
-// Small enough to read in one go, and it means nothing in this file builds
-// HTML out of strings. Not only for safety: a profile named with a < in it
-// should show a < rather than eating the rest of the page.
-
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-function button(label, className, onClick) {
-  const node = el("button", className, label);
-  node.addEventListener("click", onClick);
-  return node;
-}
-
-function put(parent, ...children) {
-  for (const child of children) if (child) parent.append(child);
-  return parent;
-}
-
-function clear(node) {
-  while (node.firstChild) node.firstChild.remove();
-}
-
-function swatch(color) {
-  const dot = el("span", "swatch");
-  dot.style.background = color;
-  return dot;
-}
-
-function field(value, onDone, { type = "text", placeholder = "" } = {}) {
-  const node = el("input");
-  node.type = type;
-  node.value = value;
-  node.placeholder = placeholder;
-  const commit = () => onDone(node.value);
-  node.addEventListener("change", commit);
-  node.addEventListener("keydown", event => {
-    if (event.key === "Enter") { node.blur(); }
-  });
-  return node;
-}
-
 const when = milliseconds =>
   milliseconds ? new Date(milliseconds).toLocaleString() : "never";
 
@@ -95,11 +69,13 @@ let store = null;
 let profile = null;        // the open profile, or null while in the launcher
 let floor = null;
 let room = null;           // the room the 3D view is showing
-let inside = false;        // is the 3D view up, rather than the floor plan
-let view = null;           // whichever canvas is up
+let where = "plan";        // "plan" | "room" | "items"
+let view = null;           // whichever canvas is up, if any
 let history = null;
 let saveTimer = null;
 let saveTrouble = "";
+let corners = 0;           // corners placed so far in a half-drawn room
+const itemsState = { search: "", filter: "all", chosenId: null };
 
 // Is the open profile one of the saved ones? False for the made-up house and
 // for a file opened when there is nowhere to put it. Changes to those are
@@ -107,12 +83,6 @@ let saveTrouble = "";
 // letting somebody spend twenty minutes on something that evaporates.
 let kept = false;
 
-/** Something changed. Record it, and write it in a moment.
- *
- *  Half a second, so a drag that fires fifty times writes once. The trailing
- *  edge rather than the leading one: what wants saving is where the room ended
- *  up, not where it was when it started moving.
- */
 function touched({ step = true } = {}) {
   if (step && history && profile) history.record(profile);
   refreshBar();
@@ -165,6 +135,19 @@ async function showLauncher() {
   clear(root);
   put(root, bar, put(screen, page));
 
+  await fillLauncher(inner);
+
+  // Last, and outside everything above, because the ways out of fillLauncher
+  // are the times it matters most: a browser that will not save, a store
+  // nobody can unlock, a list that would not load. Those are the visits where
+  // somebody needs to be able to tell you what happened, and they are exactly
+  // the visits where an early return would have skipped the footer.
+  let saved = "unknown";
+  try { saved = store ? (await store.ids()).length : 0; } catch { /* leave it */ }
+  put(inner, footer(store, saved, ISSUES, { el, put, button }));
+}
+
+async function fillLauncher(inner) {
   if (!store) {
     put(inner, notice("This browser will not save anything. Private browsing, "
                       + "or site data switched off. You can still open a file "
@@ -279,8 +262,6 @@ function importRow() {
         openProfile(await store.importProfile(text));
         return;
       }
-      // Nowhere to put it, so open it anyway rather than refusing. Working in
-      // a profile is useful even when nothing can be kept.
       openProfile(S.readExport(text), false);
     } catch (error) {
       says.textContent = error.message ?? String(error);
@@ -289,10 +270,6 @@ function importRow() {
   });
 
   return put(el("div"), put(row, picker), says);
-}
-
-function notice(text, bad = false) {
-  return el("p", bad ? "notice bad" : "notice", text);
 }
 
 // ---------------------------------------------------------------------------
@@ -375,9 +352,12 @@ function openProfile(found, isKept = true) {
   kept = isKept && Boolean(store) && !store.locked;
   floor = found.floors[0] ?? null;
   room = null;
-  inside = false;
+  where = "plan";
   history = new History(found);
   saveTrouble = "";
+  itemsState.search = "";
+  itemsState.filter = "all";
+  itemsState.chosenId = null;
   showWorkspace();
 }
 
@@ -385,24 +365,37 @@ let parts = null;          // the pieces of the workspace, for partial redraws
 
 function showWorkspace() {
   if (view) { view.stop(); view = null; }
+  corners = 0;
 
   const bar = el("header", "bar");
   const workspace = el("div", "workspace");
   const strips = el("div", "strips");
+  parts = { bar, strips, panel: null, screen: null };
+
+  put(workspace, strips);
+  clear(root);
+  put(root, bar, workspace);
+
+  if (where === "items") {
+    const screen = el("div", "screen");
+    parts.screen = screen;
+    put(workspace, screen);
+    refreshBar();
+    drawStrips();
+    drawItems();
+    return;
+  }
+
   const split = el("div", "split");
   const stage = el("div", "stage");
   const canvas = el("canvas");
   const panel = el("aside", "panel");
-
+  parts.panel = panel;
   put(stage, canvas);
   put(split, stage, panel);
-  put(workspace, strips, split);
-  clear(root);
-  put(root, bar, workspace);
+  put(workspace, split);
 
-  parts = { bar, strips, panel, stage };
-
-  if (inside && room) {
+  if (where === "room" && room) {
     view = new RoomView(canvas, {
       onChanged: () => touched(),
       onSelected: () => drawPanel(),
@@ -417,6 +410,7 @@ function showWorkspace() {
       onSelected: () => { drawStrips(); drawPanel(); },
       onFocused: () => { drawStrips(); drawPanel(); },
       onModeChanged: () => drawStrips(),
+      onDrawingChanged: placed => { corners = placed; drawStrips(); },
     });
     view.show(profile, floor);
   }
@@ -428,35 +422,58 @@ function showWorkspace() {
 
 function refreshBar() {
   if (!parts) return;
-  const bar = parts.bar;
-  clear(bar);
-  put(bar,
-    button("‹ Profiles", "quiet small", () => { saveNow(); showLauncher(); }),
+  const bar = clear(parts.bar);
+
+  const back = button("", "quiet small", () => { saveNow(); showLauncher(); },
+                      "Back to the list of profiles");
+  put(back, icon("back"), el("span", null, "Profiles"));
+
+  put(bar, back,
     put(el("div", "grow"),
         put(el("div", "row tight"), swatch(profile.color),
             el("strong", "truncate", profile.name)),
-        el("div", "where truncate", inside && room
-          ? `${floor.name} / ${room.name} · inside`
-          : (floor ? floor.name : "no floors"))),
-    button("↶", "quiet small icon", () => step("undo")),
-    button("↷", "quiet small icon", () => step("redo")),
-    kept ? null : button("Keep", "primary small", async () => {
+        el("div", "where truncate", whereLine())));
+
+  const undo = button("", "quiet small icon-only", () => step("undo"), "Undo");
+  put(undo, icon("undo"));
+  undo.disabled = !history?.canUndo;
+  const redo = button("", "quiet small icon-only", () => step("redo"), "Redo");
+  put(redo, icon("redo"));
+  redo.disabled = !history?.canRedo;
+  put(bar, undo, redo);
+
+  if (!kept) {
+    put(bar, button("Keep", "primary small", async () => {
       if (!store || store.locked) return;
       await store.save(profile);
       kept = true;
       refreshBar();
       drawStrips();
-    }),
-    button("Download", "quiet small", () => S.download(profile)));
+    }, "Save this profile in this browser"));
+  }
+  put(bar, button("Download", "quiet small", () => S.download(profile),
+                  "Save it as a file you can open on the desktop app"));
+}
 
-  const undo = bar.querySelector("button.icon");
-  if (undo) undo.disabled = !history?.canUndo;
-  const redo = bar.querySelectorAll("button.icon")[1];
-  if (redo) redo.disabled = !history?.canRedo;
-
+function whereLine() {
+  if (where === "items") return "Items";
+  if (where === "room" && room) return `${floor.name} / ${room.name} · inside`;
+  return floor ? floor.name : "no floors";
 }
 
 function step(which) {
+  // Where you were, by id, before any of this. Undo swaps the whole profile
+  // and the screen is then built again from nothing, so without writing these
+  // down first they are simply gone.
+  //
+  // It matters more than it sounds. Undo is the button people press most
+  // while they are fiddling with a shelf, and fiddling with a shelf is done
+  // from inside a room with a container selected. Losing both on every press
+  // meant one undo cost you your place and walking back took more clicks than
+  // the edit did.
+  const wasFocused = view?.focused?.id ?? null;
+  const wasSelected = view?.selected?.id ?? null;
+
   const back = which === "undo" ? history?.undo() : history?.redo();
   if (!back) return;
   profile = back;
@@ -465,16 +482,48 @@ function step(which) {
   // the new one, and fall back to the first if whatever was open is gone.
   floor = profile.floors.find(each => each.id === floor?.id) ?? profile.floors[0] ?? null;
   room = floor?.rooms.find(each => each.id === room?.id) ?? null;
-  if (!room) inside = false;
+  if (!room && where === "room") where = "plan";
   touched({ step: false });
   showWorkspace();
+  putBack(wasFocused, wasSelected);
 }
 
-/** The toolbars: floors, then whatever the current canvas needs. */
+/** Step back into the room you were in and reselect what you had.
+ *
+ *  By id, and quietly if it is not there any more: undoing the making of a
+ *  container means the thing that was selected no longer exists, which is an
+ *  ordinary outcome of undo rather than a fault.
+ */
+function putBack(focusedId, selectedId) {
+  if (!view) return;
+
+  // The two views want different things. The 3D room takes an id, the floor
+  // plan takes the object. Told apart by `where`, which is what decided which
+  // of them to build a moment ago, rather than by asking the view what it is.
+  if (where === "room") {
+    if (selectedId) view.select(selectedId);
+    return;
+  }
+
+  if (focusedId) {
+    const again = floor?.rooms.find(each => each.id === focusedId);
+    if (again) view.stepInto(again);
+  }
+
+  if (!selectedId) return;
+  const chosen = floor?.rooms.find(each => each.id === selectedId)
+    ?? floor?.rooms.flatMap(each => each.containers)
+                   .find(each => each.id === selectedId);
+  if (chosen) view.select(chosen);
+}
+
+// ---------------------------------------------------------------------------
+// THE TOOLBARS
+// ---------------------------------------------------------------------------
+
 function drawStrips() {
   if (!parts) return;
-  const strips = parts.strips;
-  clear(strips);
+  const strips = clear(parts.strips);
 
   // The warning belongs here rather than in refreshBar, which runs on every
   // change: prepending it there added another copy of the same line every
@@ -486,15 +535,44 @@ function drawStrips() {
         : "Not saved, and there is nowhere to save it. Download it to keep it.")));
   }
 
+  // Which of the three places you are in. Always first, always the same two
+  // buttons, so there is one fixed thing on the screen to navigate by.
+  const places = el("div", "chips places");
+  put(places, toolButton("plan", "Floor plan", {
+    on: where === "plan",
+    tooltip: "Draw rooms and arrange what is in them",
+    onClick: () => { where = "plan"; showWorkspace(); },
+  }));
+  // The 3D view is a place you can be, so it gets a chip of its own rather
+  // than a separate back button somewhere else on the screen. Two buttons
+  // both saying "Floor plan", one of them highlighted, is how you make
+  // somebody wonder which one they are supposed to press.
+  if (where === "room" && room) {
+    put(places, toolButton("three", `3D: ${M.short(room.name, 14)}`, {
+      on: true,
+      tooltip: "Looking inside this room",
+      onClick: () => {},
+    }));
+  }
+  put(places, toolButton("items", "Items", {
+    on: where === "items",
+    tooltip: "Everything in the catalog, and where it lives",
+    onClick: () => { where = "items"; showWorkspace(); },
+  }));
+  put(strips, places);
+
+  if (where === "items") return;
+
   const floors = el("div", "chips");
+  put(floors, el("span", "strip-label", "Floors"));
   for (const each of profile.floors) {
     put(floors, button(M.short(each.name, 20),
       `small${each === floor ? " on" : ""}`, () => {
         floor = each;
         room = null;
-        inside = false;
+        where = "plan";
         showWorkspace();
-      }));
+      }, `Show ${each.name}`));
   }
   put(floors, button("+ Floor", "quiet small", () => {
     const made = new M.Floor({
@@ -504,61 +582,169 @@ function drawStrips() {
     profile.floors.push(made);
     floor = made;
     room = null;
-    inside = false;
     touched();
     showWorkspace();
-  }));
+  }, "Add another level to this building"));
   put(strips, floors);
 
-  if (inside) {
-    const tools = el("div", "chips");
-    put(tools, button("‹ Floor plan", "small", () => {
-      inside = false;
-      showWorkspace();
-    }));
-    put(tools, el("span", "small faint",
+  if (where === "room") {
+    put(strips, hintStrip(
       "Drag a container to move it. It slides along a wall rather than "
-      + "leaving the room."));
-    put(strips, tools);
+      + "leaving the room. Press one to see what is in it, and which shelf "
+      + "each thing is on.",
+      button("Back to the floor plan", "quiet small",
+             () => { where = "plan"; showWorkspace(); },
+             "Stop looking inside this room")));
     return;
   }
 
-  // Tools.
-  const tools = el("div", "chips");
-  const tool = (label, mode, preset = null) =>
-    button(label, `small${view.mode === mode
-      && view.preset === preset ? " on" : ""}`, () => view.setMode(mode, preset));
+  drawPlanTools(strips);
+}
 
-  put(tools, tool("Select", F.SELECT), tool("Draw room", F.DRAW));
-  for (const [name] of M.ROOM_PRESETS) put(tools, tool(name, F.SHAPE, name));
-  put(tools, tool("Add container", F.BOX));
+function drawPlanTools(strips) {
+  const tools = el("div", "chips");
+  put(tools, el("span", "strip-label", "Tool"));
+  const tool = (name, label, mode, tip, preset = null) =>
+    toolButton(name, label, {
+      on: view.mode === mode && view.preset === preset,
+      tooltip: tip,
+      onClick: () => view.setMode(mode, preset),
+    });
+
+  put(tools,
+    tool("select", "Select", F.SELECT,
+         "Press a room to pick it. Press it twice to step inside."),
+    tool("draw", "Draw room", F.DRAW,
+         "Place the corners of a room one at a time"),
+    tool("box", "Add container", F.BOX,
+         "Drag a rectangle inside a room to make a shelf, drawer or bin"));
   put(tools, el("span", "grow"));
-  put(tools, button("Fit", "quiet small", () => view.fit()));
+  const fit = toolButton("fit", "Fit", {
+    tooltip: "Put everything on this floor back on the screen",
+    onClick: () => view.fit(),
+  });
+  put(tools, fit);
   put(strips, tools);
+
+  const shapes = el("div", "chips");
+  put(shapes, el("span", "strip-label", "Or start from a shape"));
+  const shapeIcons = { Rectangle: "rectangle", Square: "square", Circle: "circle",
+                       Triangle: "triangle", "L-shape": "lshape" };
+  for (const [name] of M.ROOM_PRESETS) {
+    put(shapes, toolButton(shapeIcons[name] ?? "rectangle", name, {
+      on: view.mode === F.SHAPE && view.preset === name,
+      tooltip: `Drag out a ${name.toLowerCase()} room, or press once for a `
+               + "default sized one",
+      onClick: () => view.setMode(F.SHAPE, name),
+    }));
+  }
+  put(strips, shapes);
 
   // What dragging a selected room does. Only worth showing when there is one.
   if (view.selected instanceof M.Room && !view.focused) {
     const edits = el("div", "chips");
-    put(edits, el("span", "small faint", "Dragging a room:"));
-    for (const [label, mode] of
-         [["Move", F.MOVE], ["Resize", F.RESIZE], ["Shape", F.VERTICES]]) {
-      put(edits, button(label, `small${view.editMode === mode ? " on" : ""}`,
-        () => { view.setEditMode(mode); drawStrips(); }));
-    }
-    if (view.editMode === F.VERTICES) {
-      put(edits, el("span", "small faint",
-        "Press inside to add a corner, press a corner twice to remove it."));
+    put(edits, el("span", "strip-label", "Dragging a room"));
+    for (const [name, label, mode, tip] of [
+      ["step", "Move", F.MOVE, "Drag the room around the floor"],
+      ["fit", "Resize", F.RESIZE,
+       "Square handles round the outside. Dragging one stretches the whole "
+       + "room and keeps its shape."],
+      ["draw", "Reshape", F.VERTICES,
+       "A round handle on every corner. Drag one to move that corner."],
+    ]) {
+      put(edits, toolButton(name, label, {
+        on: view.editMode === mode, tooltip: tip,
+        onClick: () => { view.setEditMode(mode); drawStrips(); },
+      }));
     }
     put(strips, edits);
   }
 
+  put(strips, hintStrip(...hintFor()));
+}
+
+/** The line under the toolbar that says what to do next.
+ *
+ *  The single most useful thing on the screen for somebody who has not used
+ *  this before. A toolbar can only say what a button is called. This can say
+ *  what happens when you press the canvas right now, which is the part nobody
+ *  can guess and everybody needs exactly once.
+ */
+function hintStrip(text, extra = null) {
+  const strip = el("div", "chips hint");
+  put(strip, icon("select", 14), el("span", "small faint grow", text));
+  if (extra) put(strip, extra);
+  return strip;
+}
+
+function hintFor() {
   if (view.mode === F.DRAW) {
-    const hint = el("div", "chips");
-    put(hint, el("span", "small faint",
-      "Press to place each corner. Press the first one again, or Enter, to "
-      + "close it. Escape gives up."));
-    put(strips, hint);
+    const buttons = put(el("div", "row tight"),
+      corners ? button("Take back a corner", "quiet small",
+        () => view.undoLastCorner(),
+        "Remove the last corner you placed") : null,
+      button("Cancel", "quiet small danger", () => view.cancelDrawing(),
+             "Throw this shape away and go back to Select"));
+    if (!corners) {
+      return ["Press the canvas to place the first corner.", buttons];
+    }
+    if (corners < 3) {
+      return [`${corners} corner${corners === 1 ? "" : "s"} placed. A room `
+              + `needs at least three.`, buttons];
+    }
+    return [`${corners} corners. Press the ringed first corner, or Enter, to `
+            + "close the room. Escape or Cancel throws it away.", buttons];
   }
+
+  if (view.mode === F.SHAPE) {
+    return [`Drag out a ${String(view.preset).toLowerCase()} anywhere on the `
+            + "floor, or press once for a default sized one.",
+            button("Cancel", "quiet small", () => view.setMode(F.SELECT),
+                   "Go back to Select")];
+  }
+
+  if (view.mode === F.BOX) {
+    return ["Drag a rectangle inside a room to make a container there.",
+            button("Cancel", "quiet small", () => view.setMode(F.SELECT),
+                   "Go back to Select")];
+  }
+
+  if (view.focused) {
+    return ["Inside " + view.focused.name + ". Drag a container to move it, "
+            + "or drag its corners to resize. Press the floor outside to come "
+            + "back out.",
+            button("Step back out", "quiet small", () => view.stepInto(null),
+                   "Stop working inside this room")];
+  }
+
+  if (view.selected instanceof M.Room) {
+    const mode = view.editMode === F.RESIZE
+      ? "Drag a square handle to stretch the whole room."
+      : (view.editMode === F.VERTICES
+        ? "Drag a round handle to move one corner. Press inside to add a "
+          + "corner, press a corner twice to remove it."
+        : "Drag the room to move it.");
+    return [`${view.selected.name} selected. ${mode} Press it twice to step `
+            + "inside and work on what is in it."];
+  }
+
+  return [profile.floors.length && floor?.rooms.length
+    ? "Press a room to select it. Press it twice to step inside. Two fingers, "
+      + "or the wheel, move the camera."
+    : "Nothing on this floor yet. Pick a shape above and drag it out, or use "
+      + "Draw room to place the corners yourself."];
+}
+
+// ---------------------------------------------------------------------------
+// THE ITEMS SCREEN
+// ---------------------------------------------------------------------------
+
+function drawItems() {
+  if (!parts?.screen) return;
+  itemsScreen(parts.screen, profile, itemsState, {
+    changed: () => touched(),
+    again: () => drawItems(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -566,9 +752,8 @@ function drawStrips() {
 // ---------------------------------------------------------------------------
 
 function drawPanel() {
-  if (!parts) return;
-  const panel = parts.panel;
-  clear(panel);
+  if (!parts?.panel) return;
+  const panel = clear(parts.panel);
 
   if (saveTrouble) put(panel, notice("That did not save. " + saveTrouble, true));
 
@@ -579,61 +764,63 @@ function drawPanel() {
 }
 
 function emptyPanel(panel) {
-  if (inside) {
-    put(panel, el("p", "note",
-      "Press a container to see what is in it."));
-  } else if (!floor?.rooms.length) {
-    put(panel, el("p", "note",
-      "Nothing on this floor yet. Pick a shape above and drag it out, or use "
-      + "Draw room to place the corners yourself."));
-  } else {
-    put(panel, el("p", "note",
-      "Press a room to select it. Press it twice to step inside and work on "
-      + "what is in it."));
-  }
-  const loose = profile.items.filter(item => item.isUnfiled()).length;
+  put(panel, el("p", "note", where === "room"
+    ? "Press a container to see what is in it."
+    : "Nothing selected. The line under the toolbar says what the tool you "
+      + "have picked will do."));
+
+  const loose = profile.unfiledItems().length;
   if (loose) {
-    put(panel, el("p", "note",
-      `${loose} item${loose === 1 ? " is" : "s are"} not in any container. `
-      + "The screen for those is not built yet."));
+    const row = put(el("div", "row"),
+      button(`${loose} item${loose === 1 ? "" : "s"} not in any container`,
+             "quiet small", () => {
+               where = "items";
+               itemsState.filter = "unfiled";
+               showWorkspace();
+             }, "Show them on the items screen"));
+    put(panel, row);
   }
 }
 
 /** Name, color and a row of buttons, which every kind of thing wants. */
 function header(panel, thing, { onRename, onRecolor, onDelete, onDuplicate }) {
   put(panel, put(el("div", "row"),
-    field(thing.name, value => { onRename(M.cleanName(value)); })));
+    field(thing.name, value => onRename(M.cleanName(value)),
+          { placeholder: "name" })));
+  put(panel, colors(thing.color, onRecolor));
 
-  const dots = el("div", "dots");
-  for (const color of T.SWATCHES) {
-    const dot = button("", color === thing.color ? "on" : "", () => onRecolor(color));
-    dot.style.background = color;
-    dot.title = color;
-    put(dots, dot);
+  const row = el("div", "row tight");
+  if (onDuplicate) {
+    const copy = button("", "quiet small", onDuplicate, "Make another one like this");
+    put(copy, icon("copy"), el("span", null, "Duplicate"));
+    put(row, copy);
   }
-  put(panel, dots);
-
-  put(panel, put(el("div", "row"),
-    onDuplicate ? button("Duplicate", "quiet small", onDuplicate) : null,
-    onDelete ? button("Delete", "quiet small danger", onDelete) : null));
-}
-
-function numberRow(label, value, onDone, step = T.GRID_SIZE) {
-  const box = el("input");
-  box.type = "number";
-  box.value = Math.round(value);
-  box.step = step;
-  box.addEventListener("change", () => {
-    const asked = Number(box.value);
-    if (Number.isFinite(asked)) onDone(asked);
-  });
-  return put(el("label", "field"), el("span", "small faint", label), box);
+  if (onDelete) {
+    const drop = button("", "quiet small danger", onDelete, "Delete this");
+    put(drop, icon("trash"), el("span", null, "Delete"));
+    put(row, drop);
+  }
+  put(panel, row);
 }
 
 function roomPanel(panel, chosen) {
   put(panel, el("h3", null, "Room"));
   header(panel, chosen, {
-    onRename: name => { chosen.name = name; touched(); view.draw(); drawPanel(); },
+    // drawStrips and refreshBar as well as the panel, because a name is on
+    // screen in more places than the box you typed it into. The line under
+    // the toolbar says "<name> selected", the chip says "3D: <name>" and the
+    // top bar says which room you are inside. Redrawing only the panel left
+    // all three saying the old name, and worse, saying it NEXT to the new
+    // one: the app called the same room two different things at once until
+    // you happened to click something else.
+    onRename: name => {
+      chosen.name = name;
+      touched();
+      view.draw();
+      drawPanel();
+      drawStrips();
+      refreshBar();
+    },
     onRecolor: color => { chosen.color = color; touched(); view.draw(); drawPanel(); },
     onDuplicate: () => {
       const copy = M.duplicate(chosen, M.copyName(chosen.name,
@@ -647,8 +834,9 @@ function roomPanel(panel, chosen) {
     },
     onDelete: () => {
       if (!confirm(`Delete "${chosen.name}" and its ${
-        chosen.containers.length} container(s)?`)) return;
-      floor.rooms = floor.rooms.filter(each => each !== chosen);
+        chosen.containers.length} container(s)? What was in them stays in the `
+        + "catalog, not filed anywhere.")) return;
+      profile.deleteRoom(chosen.id);
       touched();
       view.select(null);
       view.draw();
@@ -658,16 +846,16 @@ function roomPanel(panel, chosen) {
 
   const [, , wide, high] = chosen.bounds();
   put(panel, put(el("div", "row"),
-    numberRow("Width", wide, value => {
+    numberField("Width", wide, value => {
       chosen.resizeTo(Math.max(value, T.GRID_SIZE), high, 0, 0);
       for (const box of chosen.containers) M.fitContainer(chosen, box);
       touched(); view.draw(); drawPanel();
-    }),
-    numberRow("Depth", high, value => {
+    }, { step: T.GRID_SIZE, min: T.GRID_SIZE }),
+    numberField("Depth", high, value => {
       chosen.resizeTo(wide, Math.max(value, T.GRID_SIZE), 0, 0);
       for (const box of chosen.containers) M.fitContainer(chosen, box);
       touched(); view.draw(); drawPanel();
-    })));
+    }, { step: T.GRID_SIZE, min: T.GRID_SIZE })));
 
   const lock = el("label", "check");
   const tick = el("input");
@@ -677,28 +865,45 @@ function roomPanel(panel, chosen) {
     chosen.locked = tick.checked;
     touched();
     view.draw();
+    drawStrips();
   });
   put(lock, tick, el("span", "small", "Locked, so it cannot be moved by accident"));
   put(panel, lock);
 
-  put(panel, put(el("div", "row"),
-    button("Step inside", "small", () => view.stepInto(chosen)),
-    button("3D view", "primary small", () => {
-      room = chosen;
-      inside = true;
-      showWorkspace();
-    })));
+  const stepIn = button("", "small", () => view.stepInto(chosen),
+                        "Work on what is in this room");
+  put(stepIn, icon("step"), el("span", null, "Step inside"));
+  const three = button("", "primary small", () => {
+    room = chosen;
+    where = "room";
+    showWorkspace();
+  }, "See this room in 3D");
+  put(three, icon("three"), el("span", null, "3D view"));
+  put(panel, put(el("div", "row"), stepIn, three));
 
   put(panel, el("p", "note small",
     `${chosen.points.length} corners, ${chosen.containers.length} container${
-      chosen.containers.length === 1 ? "" : "s"}`));
+      chosen.containers.length === 1 ? "" : "s"}, `
+    + `${profile.itemsInRoom(chosen).length} different things in it`));
 }
 
 function containerPanel(panel, chosen) {
-  const holder = inside ? room : view.roomOf(chosen);
+  const holder = where === "room" ? room : view.roomOf(chosen);
   put(panel, el("h3", null, "Container"));
+  if (holder) {
+    put(panel, el("p", "small faint truncate", profile.containerPath(chosen.id)));
+  }
+
   header(panel, chosen, {
-    onRename: name => { chosen.name = name; touched(); view.draw(); drawPanel(); },
+    // Same as a room's: the name is drawn in the strips and the bar too.
+    onRename: name => {
+      chosen.name = name;
+      touched();
+      view.draw();
+      drawPanel();
+      drawStrips();
+      refreshBar();
+    },
     onRecolor: color => { chosen.color = color; touched(); view.draw(); drawPanel(); },
     onDuplicate: holder ? () => {
       const copy = M.duplicate(chosen, M.copyName(chosen.name,
@@ -712,15 +917,11 @@ function containerPanel(panel, chosen) {
       view.draw();
     } : null,
     onDelete: holder ? () => {
-      holder.containers = holder.containers.filter(each => each !== chosen);
-      // The items that were in it are not deleted with it. They become
-      // unfiled, which is what the desktop app does and what anybody would
-      // expect: taking a shelf out of a room does not mean throwing away
-      // what was on it.
-      for (const item of profile.items) {
-        item.placements = item.placements.filter(
-          place => place.containerId !== chosen.id);
-      }
+      const inside = profile.itemCountInContainer(chosen.id);
+      if (inside && !confirm(`Delete "${chosen.name}"? The ${inside} thing${
+        inside === 1 ? "" : "s"} in it stay in the catalog, not filed `
+        + "anywhere.")) return;
+      profile.deleteContainer(chosen.id);
       touched();
       view.select(null);
       view.draw();
@@ -728,42 +929,25 @@ function containerPanel(panel, chosen) {
   });
 
   put(panel, put(el("div", "row"),
-    numberRow("Width", chosen.w, value => {
+    numberField("Width", chosen.w, value => {
       resizeContainer(holder, chosen, Math.max(value, M.MIN_CONTAINER_SIZE), chosen.h);
-    }),
-    numberRow("Depth", chosen.h, value => {
+    }, { step: T.GRID_SIZE, min: M.MIN_CONTAINER_SIZE }),
+    numberField("Depth", chosen.h, value => {
       resizeContainer(holder, chosen, chosen.w, Math.max(value, M.MIN_CONTAINER_SIZE));
-    })));
+    }, { step: T.GRID_SIZE, min: M.MIN_CONTAINER_SIZE })));
 
-  const heights = el("select");
-  for (const [name, value] of M.CONTAINER_HEIGHTS) {
-    const option = el("option", null, name);
-    option.value = String(value);
-    option.selected = M.nearestHeight(chosen.height) === value;
-    put(heights, option);
-  }
-  heights.addEventListener("change", () => {
-    chosen.height = M.clampHeight(Number(heights.value));
-    touched();
-    view.draw();
+  put(panel, choose("Height, which only the 3D view uses",
+    M.CONTAINER_HEIGHTS.map(([name, value]) => [value, name]),
+    M.nearestHeight(chosen.height), value => {
+      chosen.height = M.clampHeight(Number(value));
+      touched();
+      view.draw();
+    }));
+
+  contentsPanel(panel, profile, chosen, {
+    changed: () => { touched(); view.draw(); },
+    again: () => drawPanel(),
   });
-  put(panel, put(el("label", "field"), el("span", "small faint", "Height"), heights));
-
-  const tiers = el("input");
-  tiers.type = "number";
-  tiers.min = 0;
-  tiers.max = 20;
-  tiers.value = chosen.tierCount;
-  tiers.addEventListener("change", () => {
-    chosen.tierCount = Math.max(0, Math.min(20, Math.round(Number(tiers.value) || 0)));
-    touched();
-    view.draw();
-    drawPanel();
-  });
-  put(panel, put(el("label", "field"),
-    el("span", "small faint", "Tiers, for a shelf with separate levels"), tiers));
-
-  itemsSection(panel, chosen);
 }
 
 function resizeContainer(holder, box, wide, high) {
@@ -778,60 +962,6 @@ function resizeContainer(holder, box, wide, high) {
   touched();
   view.draw();
   drawPanel();
-}
-
-function itemsSection(panel, container) {
-  const found = [];
-  for (const item of profile.items) {
-    for (const place of item.placements) {
-      if (place.containerId === container.id) found.push([item, place]);
-    }
-  }
-
-  put(panel, el("h3", null, found.length ? "Inside" : "Empty"));
-  const list = el("div", "items");
-  for (const [item, place] of found) {
-    const row = el("div", "item");
-    put(row, swatch(item.color), el("span", "grow truncate", item.name));
-    put(row, el("span", "qty", `${place.quantity}`));
-    put(row, button("−", "quiet small", () => {
-      place.quantity = Math.max(0, place.quantity - 1);
-      if (!place.quantity) {
-        // Out of this container, not out of the catalog. Emptying a shelf is
-        // not the same as saying you no longer own the thing.
-        item.placements = item.placements.filter(each => each !== place);
-        item.updatedAt = M.nowStamp();
-      }
-      touched(); view.draw(); drawPanel();
-    }));
-    put(row, button("+", "quiet small", () => {
-      place.quantity += 1;
-      touched(); view.draw(); drawPanel();
-    }));
-    put(list, row);
-  }
-  put(panel, list);
-
-  const box = el("input");
-  box.type = "text";
-  box.placeholder = "add an item";
-  const add = () => {
-    const name = M.cleanName(box.value, "");
-    if (!name) return;
-    profile.items.push(new M.Item({
-      name,
-      color: T.SWATCHES[profile.items.length % T.SWATCHES.length],
-      placements: [new M.Placement(container.id, 1, 0)],
-    }));
-    box.value = "";
-    touched(); view.draw(); drawPanel();
-  };
-  box.addEventListener("keydown", event => {
-    if (event.key === "Enter") add();
-  });
-  const adder = put(el("div", "row"), box, button("Add", "small", add));
-  adder.style.marginTop = "var(--space-sm)";
-  put(panel, adder);
 }
 
 // ---------------------------------------------------------------------------

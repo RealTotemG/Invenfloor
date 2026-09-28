@@ -75,7 +75,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 
-from models import Profile
+from models import SCHEMA, Profile, imported_name, new_id, schema_of
 
 APP_FOLDER_NAME = "InventoryApp"
 BACKUPS_FOLDER_NAME = "backups"
@@ -239,20 +239,42 @@ class Recovery:
     broken_file: str        # where the unreadable one was put, so it can be seen
 
 
+@dataclass
+class Refusal:
+    """A profile we deliberately did not open, and why.
+
+    Different from a Recovery in the way that matters most: nothing was
+    rescued and nothing was written. The file is exactly as it was found.
+    """
+    profile_name: str       # best guess from the file, may be ""
+    path: str
+    why: str                # a sentence to put in front of someone
+
+
 def load_profiles():
     """Read every profile file and return them as Profile objects.
 
     What almost every caller wants. If you also need to know whether anything
-    had to be rescued on the way in, call load_profiles_and_recoveries.
+    had to be rescued or refused on the way in, call
+    load_profiles_and_problems.
     """
-    profiles, _ = load_profiles_and_recoveries()
+    profiles, _, _ = load_profiles_and_problems()
     return profiles
 
 
-def load_profiles_and_recoveries():
-    """Every profile, plus a Recovery for each one that needed rescuing."""
+def load_profiles_and_problems():
+    """Every profile, plus a Recovery for each one that needed rescuing and a
+    Refusal for each one we would not open.
+
+    Used to be load_profiles_and_recoveries, and grew a third list when it
+    turned out there was a second kind of bad news. The two are worth keeping
+    apart: a recovery has already happened and the question is how much work
+    is missing, while a refusal has not happened and the question is what to
+    do about it.
+    """
     profiles = []
     recoveries = []
+    refusals = []
     folder = data_folder()
 
     for filename in sorted(os.listdir(folder)):
@@ -262,7 +284,9 @@ def load_profiles_and_recoveries():
             continue
 
         profile_id = filename[:-len(".json")]
-        profile, recovery = _load_one(profile_id)
+        profile, recovery, refusal = _load_one(profile_id)
+        if refusal is not None:
+            refusals.append(refusal)
         if profile is None:
             continue
         profiles.append(profile)
@@ -273,24 +297,58 @@ def load_profiles_and_recoveries():
     # Sort by name so the launcher screen shows a stable, predictable order
     # rather than whatever order the filesystem happened to hand back.
     profiles.sort(key=lambda p: p.name.lower())
-    return profiles, recoveries
+    return profiles, recoveries, refusals
 
 
 def _load_one(profile_id):
     """Read one profile, falling back through its backups.
 
-    Returns (profile, recovery). The profile is None if nothing at all could
-    be read. The recovery is None in the ordinary case where the file was
-    fine, which is almost always.
+    Returns (profile, recovery, refusal). The profile is None if nothing could
+    be read or if we would not read it. The recovery is None in the ordinary
+    case where the file was fine, which is almost always.
     """
     live = profile_path(profile_id)
+    raw = _read_raw(live)
 
-    profile = _read(live)
+    # A profile from the future is not a broken profile, and reaching for a
+    # backup would be wrong: its backups are from the future too, and the live
+    # file is the newest thing there is. Nothing is opened and nothing is
+    # touched.
+    if raw is not None and _from_the_future(raw):
+        return None, None, Refusal(
+            profile_name=_name_in(raw), path=live,
+            why=f"It was saved by a newer version of Invenfloor (format "
+                f"{schema_of(raw)}; this one understands {SCHEMA}). Opening it "
+                f"here would drop everything the newer version added, and the "
+                f"next save would make that permanent.")
+
+    profile = _build(raw, live)
     if profile is not None:
-        return profile, None
+        return profile, None, None
 
-    for path, description in _fallbacks(profile_id):
-        profile = _read(path)
+    # The live file is no good, so its backups matter now. Read all of them
+    # before touching any of them. Deciding one at a time is what lets the
+    # bad case through: skip a .bak from the future, rescue from an older
+    # snapshot instead, and it all looks like it worked, right up until the
+    # next save renames the live file over that .bak and the newer version's
+    # work is gone anyway. One future file anywhere in the chain means
+    # nothing here gets opened.
+    spares = [(path, description, _read_raw(path))
+              for path, description in _fallbacks(profile_id)]
+
+    for path, description, spare in spares:
+        if spare is not None and _from_the_future(spare):
+            return None, None, Refusal(
+                profile_name=_name_in(spare), path=live,
+                why=f"The file itself would not open, and {description} was "
+                    f"written by a newer version of Invenfloor (format "
+                    f"{schema_of(spare)}; this one understands {SCHEMA}). "
+                    f"Recovering from an older backup instead would look like "
+                    f"it worked, and then the next save would write over the "
+                    f"newer one. Nothing here has been changed.")
+
+    for path, description, spare in spares:
+        profile = _build(spare, path)
         if profile is None:
             continue
 
@@ -301,9 +359,42 @@ def _load_one(profile_id):
         broken = _set_aside(live)
         shutil.copy2(path, live)
         return profile, Recovery(profile_name="", came_from=description,
-                                 broken_file=broken)
+                                 broken_file=broken), None
 
-    return None, None
+    if raw is None and not os.path.exists(live):
+        return None, None, None
+
+    return None, None, Refusal(
+        profile_name=_name_in(raw), path=live,
+        why="It would not open, and neither would any of its backups. The "
+            "file has been left exactly as it was found.")
+
+
+def _from_the_future(raw):
+    """Was this written by a version of Invenfloor newer than this one?
+
+    Worth catching rather than shrugging at, and the reason is the second
+    half. migrate() only ever moves a file forward, so a format 3 file handed
+    to a build that understands up to 2 passes straight through it untouched.
+    Profile.from_dict then reads the fields it knows and silently drops the
+    rest, because from_dict is forgiving by design. Nothing goes wrong yet.
+
+    What goes wrong is the next save, which writes that flattened profile back
+    over the real one as a format 2 file, with everything the newer version
+    added gone for good. Silent, permanent, and it only happens on whichever
+    machine is one update behind, which is exactly the machine nobody is
+    watching.
+
+    So a file from the future is not opened at all.
+    """
+    return schema_of(raw) > SCHEMA
+
+
+def _name_in(raw):
+    """The profile's name out of a raw dict, for a message. "" if unreadable."""
+    if isinstance(raw, dict) and isinstance(raw.get("name"), str):
+        return raw["name"]
+    return ""
 
 
 def _fallbacks(profile_id):
@@ -321,8 +412,15 @@ def _fallbacks(profile_id):
     return places
 
 
-def _read(path):
-    """Load a Profile from one file, or None if that file is no good.
+def _read_raw(path):
+    """The parsed JSON out of one file, or None if that file is no good.
+
+    Reading and building are two steps rather than one, and the split is what
+    lets the format number be looked at before anything is built from it. By
+    the time a Profile exists, from_dict has already thrown away whatever it
+    did not recognize, so a file from the future looks identical to a file
+    from the present. The only place the difference is still visible is here,
+    in the raw dictionary.
 
     The catch is deliberately wide. A save file is not trusted input in the
     security sense, but it is a file on a disk that can be truncated by a
@@ -343,12 +441,24 @@ def _read(path):
     if not _looks_like_a_profile(raw):
         print(f"[storage] {os.path.basename(path)} is not a profile file")
         return None
+    return raw
 
+
+def _build(raw, path):
+    """A Profile out of a raw dictionary, or None if it will not build."""
+    if raw is None:
+        return None
     try:
         return Profile.from_dict(raw)
     except (ValueError, TypeError, KeyError, AttributeError) as error:
         print(f"[storage] Could not read {os.path.basename(path)}: {error}")
         return None
+
+
+def _read(path):
+    """A Profile straight from a file. Kept for anything outside this module
+    that only wants the one step."""
+    return _build(_read_raw(path), path)
 
 
 def _looks_like_a_profile(raw):
@@ -377,6 +487,80 @@ def _looks_like_a_profile(raw):
     return (isinstance(raw, dict)
             and isinstance(raw.get("id"), str) and raw["id"]
             and isinstance(raw.get("floors"), list))
+
+
+# ---------------------------------------------------------------------------
+# BRINGING A PROFILE IN FROM SOMEWHERE ELSE
+# ---------------------------------------------------------------------------
+
+class CannotImport(Exception):
+    """Why a file could not be brought in, in words to put in front of someone.
+
+    An exception rather than a returned None because every one of these has a
+    different reason and the reason is the useful part. A caller that got None
+    back could only say "that did not work", which is the least helpful thing
+    a program can tell you about a file you just chose.
+    """
+
+
+def import_profile(path, existing=()):
+    """Read a profile file from anywhere and save it here as a new profile.
+
+    `existing` is the profiles already on screen, used to pick a name that can
+    be told apart from them. It is not what decides whether something is
+    overwritten: the folder is.
+
+    NOTHING ALREADY HERE IS EVER WRITTEN OVER, and that is the whole design.
+    The likeliest reason to use this at all is carrying a profile between two
+    machines, and on the second machine the id usually already exists, because
+    it is the SAME profile a few edits apart. Writing over it would be the one
+    outcome that cannot be undone, and it would happen at the exact moment
+    somebody is least expecting it: they think they are adding something.
+
+    So an id that is already in the folder gets a fresh one, and the two sit
+    side by side until their owner decides which to keep. Checked against the
+    folder rather than against `existing`, because a file this program refused
+    to open is still a file, and the one thing worse than overwriting a
+    profile is overwriting the one it would not open.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            raw = json.load(file)
+    except OSError as error:
+        raise CannotImport(f"That file could not be opened.\n\n{error}")
+    except ValueError:
+        raise CannotImport(
+            "That file is not valid JSON, so there is nothing in it to read. "
+            "An Invenfloor profile is a .json file written by this program.")
+
+    if not _looks_like_a_profile(raw):
+        raise CannotImport(
+            "That is a JSON file, but it is not an Invenfloor profile. A "
+            "profile file has an id and a list of floors in it.")
+
+    if _from_the_future(raw):
+        raise CannotImport(
+            f"That profile was saved by a newer version of Invenfloor "
+            f"(format {schema_of(raw)}; this one understands {SCHEMA}). "
+            f"Bringing it in here would drop everything the newer version "
+            f"added, and the next save would make that permanent. Update this "
+            f"copy of Invenfloor first.")
+
+    profile = _build(raw, path)
+    if profile is None:
+        raise CannotImport(
+            "That file looks like a profile but would not open. It may have "
+            "been cut short partway through writing, or edited by hand.")
+
+    while os.path.exists(profile_path(profile.id)):
+        profile.id = new_id()
+
+    names = [other.name for other in existing]
+    if profile.name.strip().lower() in {name.strip().lower() for name in names}:
+        profile.name = imported_name(profile.name, names)
+
+    save_profile(profile)
+    return profile
 
 
 def _set_aside(path):
