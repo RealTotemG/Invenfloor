@@ -93,6 +93,13 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   flex: none;
 }
 .bar h1 { font-size: var(--size-lg); margin: 0; letter-spacing: -.01em; }
+/* On a narrow screen the profile name, the floor name and four buttons do not
+   fit on one line, and squeezing them leaves "A m..." next to "Groun...".
+   The name gets its own line instead, above the buttons. */
+@media (max-width: 560px) {
+  .bar { flex-wrap: wrap; }
+  .bar > .grow { flex: 1 0 100%; order: -1; }
+}
 .bar .where { color: var(--text-muted); font-size: var(--size-sm); }
 
 .screen { flex: 1 1 auto; min-height: 0; overflow: auto; }
@@ -172,6 +179,7 @@ h2:first-child { margin-top: 0; }
 /* -- inside a profile ------------------------------------------------------ */
 
 .workspace { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.strips { flex: none; }
 
 .chips {
   display: flex;
@@ -200,10 +208,12 @@ h2:first-child { margin-top: 0; }
   display: block;
   width: 100%;
   height: 100%;
-  /* pan-y so a finger can still scroll the page vertically, while a drag
-     across a container is the canvas's. Without this the whole page moves
-     when somebody tries to shift a shelf. */
-  touch-action: pan-y;
+  /* none, not pan-y. One finger is the tool and two fingers are the camera,
+     so every touch on this canvas belongs to the canvas. The page itself does
+     not scroll, the panel beside it does, so nothing is trapped by this. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .stage .empty {
   position: absolute; inset: 0;
@@ -235,12 +245,33 @@ h2:first-child { margin-top: 0; }
   font-size: var(--size-sm);
 }
 
-.dots { display: flex; gap: 5px; flex-wrap: wrap; }
+.dots { display: flex; gap: 5px; flex-wrap: wrap; margin: var(--space-sm) 0; }
 .dots button {
   width: 22px; height: 22px; min-height: 22px; padding: 0;
   border-radius: 50%; border: 2px solid transparent;
 }
 .dots button.on { border-color: var(--text); }
+
+.field { display: flex; flex-direction: column; gap: 2px; flex: 1 1 0; min-width: 0; }
+.field input, .field select {
+  font: inherit;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  width: 100%;
+  min-width: 0;
+}
+.check {
+  display: flex; align-items: center; gap: var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+.check input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+
+button.icon {
+  font-size: 17px; line-height: 1; padding: 6px 10px; min-width: 36px;
+}
 
 @media (min-width: 760px) {
   .split { flex-direction: row; }

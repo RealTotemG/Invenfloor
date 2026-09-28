@@ -6,7 +6,7 @@
 <title>Invenfloor web: workbench</title>
 
 <!--
-  A workbench, not the app. There is no app yet.
+  A workbench, not the app. The app is index.html, next door.
 
   Three jobs. It proves model.js works in a real browser rather than only in
   node, which is not the same thing and is worth knowing before anything is
@@ -163,7 +163,21 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
     <ul class="checks" id="lockedChecks"></ul>
   </div>
 
-  <h2>4. What is saved in this browser</h2>
+  <h2>4. Does the floor plan work?</h2>
+  <p class="note">
+    The canvas driven through the same pointer events a hand produces, on a
+    bench of its own off the side of the page. An earlier version of these
+    pressed at fractions of the real app's canvas and hoped a handle was
+    there; it found two real bugs and then spent longer failing for reasons
+    that were the test's fault than the code's. These ask the view where a
+    handle actually is and press exactly there.
+  </p>
+  <div class="panel">
+    <p class="tally busy" id="floorTally">the floor plan: running…</p>
+    <ul class="checks" id="floorChecks"></ul>
+  </div>
+
+  <h2>5. What is saved in this browser</h2>
   <p class="note">
     The real store, the one the app will use. It belongs to this browser on
     this device: what you save in Chrome here is not what Safari on a phone
@@ -176,13 +190,13 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
     <div id="stored" style="margin-top:14px">reading…</div>
   </div>
 
-  <h2>5. What is not built yet</h2>
+  <h2>6. What is not built yet</h2>
   <ul class="todo">
     <li class="done"><s>Storage.</s> Done, and checked above.</li>
-    <li><b>The floor plan canvas.</b> The biggest remaining piece.</li>
-    <li><b>The room view.</b> Mostly exists, as the demo on the portfolio
-        site. It needs to read this model instead of its own flattened one.</li>
-    <li><b>The items screen.</b></li>
+    <li class="done"><s>The room view.</s> Done. It is in the app next door.</li>
+    <li class="done"><s>The floor plan canvas.</s> Done, and checked above.</li>
+    <li><b>The items screen</b>, and somewhere to see the ones that are not in
+        any container.</li>
   </ul>
   <p class="note">
     One thing the desktop app is missing, now that saves can travel: it has no
@@ -196,6 +210,7 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 import * as M from "./model.js";
 import * as S from "./storage.js";
 import { runStorageChecks, runVaultChecks } from "./storage_checks.js";
+import { runFloorChecks } from "./floor_checks.js";
 
 const escape = text => String(text).replace(/[<>&]/g,
   c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
@@ -450,6 +465,7 @@ runInto("storeTally", "storeChecks", "saving, with nothing over it",
 runInto("lockedTally", "lockedChecks", "saving, with a passphrase over it",
         () => runStorageChecks("invenfloor-checks-locked",
                                { passphrase: "a checking passphrase" }));
+runInto("floorTally", "floorChecks", "the floor plan", () => runFloorChecks());
 
 // ---------------------------------------------------------------------------
 // 4. What is in the real store

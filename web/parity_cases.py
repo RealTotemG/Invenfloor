@@ -122,6 +122,39 @@ def main():
             cases["point"].append({"points": points, "p": [px, py],
                                    "answer": M.point_in_polygon(points, px, py)})
 
+    # Reshaping a room: adding a corner, dropping one, and stretching the
+    # whole thing. These are what the floor plan canvas does, and every one of
+    # them edits the points list in place, which is exactly the kind of code
+    # that is easy to port with an off-by-one nobody sees until a room goes
+    # inside out.
+    cases["reshape"] = []
+    for label, points in shapes():
+        for (px, py) in [(0, 0), (200, 150), (-40, 30), (400, 300), (123.5, 77.25)]:
+            room = M.Room(points=[list(p) for p in points])
+            at = room.insert_point_on_nearest_edge(px, py)
+            cases["reshape"].append({
+                "label": f"{label} insert at {px},{py}", "points": points,
+                "op": "insert", "arg": [px, py],
+                "answer": {"index": at, "points": room.points}})
+
+        for index in [0, 1, 2, len(points) - 1, len(points), -1, 99]:
+            room = M.Room(points=[list(p) for p in points])
+            ok = room.remove_point(index)
+            cases["reshape"].append({
+                "label": f"{label} remove {index}", "points": points,
+                "op": "remove", "arg": index,
+                "answer": {"ok": ok, "points": room.points}})
+
+        for (w, h, ax, ay) in [(200, 150, None, None), (800, 60, None, None),
+                               (100, 100, 0, 0), (250, 250, -50, 25),
+                               (0, 0, None, None), (400, 300, None, None)]:
+            room = M.Room(points=[list(p) for p in points])
+            room.resize_to(w, h, ax, ay)
+            cases["reshape"].append({
+                "label": f"{label} resize to {w}x{h} at {ax},{ay}",
+                "points": points, "op": "resize", "arg": [w, h, ax, ay],
+                "answer": {"points": room.points}})
+
     for _ in range(400):
         quad = [[round(rng.uniform(-100, 100), 2), round(rng.uniform(-100, 100), 2)]
                 for _ in range(4)]

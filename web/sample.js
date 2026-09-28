@@ -23,8 +23,12 @@ export function sample() {
   const ground = new M.Floor({ name: "Ground floor", color: "#4f7cff" });
   const upstairs = new M.Floor({ name: "Upstairs", color: "#a78bfa" });
 
+  // Laid out side by side on the floor, not all at the origin. Every room
+  // defaults to (0, 0), which the 3D view never showed because it only ever
+  // draws one, and which a floor plan shows as one house stacked on top of
+  // itself.
   const garage = new M.Room({
-    name: "Garage", color: "#33d6a0",
+    name: "Garage", color: "#33d6a0", x: 0, y: 0,
     points: M.lShapePoints(420, 320),
   });
   garage.containers = [
@@ -37,7 +41,7 @@ export function sample() {
   ];
 
   const kitchen = new M.Room({
-    name: "Kitchen", color: "#4f7cff",
+    name: "Kitchen", color: "#4f7cff", x: 480, y: 0,
     points: M.rectanglePoints(340, 260),
   });
   kitchen.containers = [
@@ -48,7 +52,7 @@ export function sample() {
   ];
 
   const closet = new M.Room({
-    name: "Hall closet", color: "#e879f9",
+    name: "Hall closet", color: "#e879f9", x: 60, y: 60,
     points: M.rectanglePoints(180, 140),
   });
   closet.containers = [

@@ -965,7 +965,14 @@ class Room:
             ax, ay = self.points[index]
             bx, by = self.points[(index + 1) % count]
             cx, cy, distance = closest_point_on_segment(ax, ay, bx, by, x, y)
-            if best_distance is None or distance < best_distance:
+            # The tolerance decides ties, and a tie is not a freak case: click
+            # the exact middle of a circle and all twenty edges are equally
+            # close. Without it the winner is whichever one floating point
+            # rounded a fraction lower, which means this app and the browser
+            # one can put the new corner on different edges of the same room
+            # from the same click. Both answers are correct and they should
+            # still be the same answer, so ties go to the earlier edge.
+            if best_distance is None or distance < best_distance - 1e-9:
                 best_distance = distance
                 best_index = index
                 best_point = (cx, cy)

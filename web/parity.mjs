@@ -74,6 +74,23 @@ for (const c of cases.nearest) {
         M.nearestFit(roomOf(c.points), ...c.rect), c.points);
 }
 
+for (const c of cases.reshape) {
+  // A fresh Room each time: all three of these edit the points in place, so
+  // reusing one would be asking the second case about the first one's answer.
+  const room = new M.Room({ points: c.points.map(point => [...point]) });
+  let got;
+  if (c.op === "insert") {
+    got = { index: room.insertPointOnNearestEdge(c.arg[0], c.arg[1]),
+            points: room.points };
+  } else if (c.op === "remove") {
+    got = { ok: room.removePoint(c.arg), points: room.points };
+  } else {
+    room.resizeTo(...c.arg);
+    got = { points: room.points };
+  }
+  check(`Room.${c.op}`, c.label, c.answer, got, c.points);
+}
+
 for (const c of cases.shapes) {
   check("bounds", c.label, c.bounds, M.boundsOf(roomOf(c.points)));
   check("center", c.label, c.center, new M.Room({ points: c.points }).center());

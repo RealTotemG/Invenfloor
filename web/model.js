@@ -708,6 +708,77 @@ export class Room {
 
   bounds() { return boundsOf(this); }
 
+  /** Add a corner on whichever edge is closest to (x, y).
+   *
+   *  The new corner goes ON the edge rather than at the exact spot you
+   *  clicked, so the outline does not change shape the instant you add one.
+   *  You add a corner, then drag it where you want it. Dropping it at the raw
+   *  click point puts a dent in the wall before anybody asked for one.
+   *
+   *  Returns the index of the new point, so the caller can select it.
+   */
+  insertPointOnNearestEdge(x, y) {
+    if (this.points.length < 2) return null;
+
+    let bestIndex = 0;
+    let bestDistance = null;
+    let bestPoint = null;
+
+    for (let index = 0; index < this.points.length; index++) {
+      const [ax, ay] = this.points[index];
+      const [bx, by] = this.points[(index + 1) % this.points.length];
+      const [cx, cy, distance] = closestPointOnSegment(ax, ay, bx, by, x, y);
+      // The tolerance decides ties, and a tie is not a freak case: click the
+      // exact middle of a circle and all twenty edges are equally close.
+      // Without it the winner is whichever one floating point rounded a
+      // fraction lower, and Python and JavaScript do not round the same way,
+      // so the two programs put the new corner on different edges of the same
+      // room from the same click. Both answers are correct and they should
+      // still be the same answer, so ties go to the earlier edge.
+      if (bestDistance === null || distance < bestDistance - 1e-9) {
+        bestDistance = distance;
+        bestIndex = index;
+        bestPoint = [cx, cy];
+      }
+    }
+
+    this.points.splice(bestIndex + 1, 0, [bestPoint[0], bestPoint[1]]);
+    return bestIndex + 1;
+  }
+
+  /** Delete one corner. Refuses below three, which is the fewest that still
+   *  encloses an area. */
+  removePoint(index) {
+    if (this.points.length <= 3) return false;
+    if (!(index >= 0 && index < this.points.length)) return false;
+    this.points.splice(index, 1);
+    return true;
+  }
+
+  /** Stretch the whole room to a new width and height.
+   *
+   *  Every point moves in proportion, so the shape is kept: stretch a circle
+   *  and you get an oval, stretch an L and the notch stays where it should be.
+   *  This is what the corner handles on a selected room do.
+   *
+   *  anchorLeft and anchorTop say where the new bounding box should start.
+   *  Leave them out to keep the current top-left corner still.
+   */
+  resizeTo(newWidth, newHeight, anchorLeft = null, anchorTop = null) {
+    const [left, top, width, height] = this.bounds();
+    if (width <= 0 || height <= 0) return;
+
+    const atLeft = anchorLeft === null ? left : anchorLeft;
+    const atTop = anchorTop === null ? top : anchorTop;
+    const scaleX = newWidth / width;
+    const scaleY = newHeight / height;
+
+    for (const point of this.points) {
+      point[0] = atLeft + (point[0] - left) * scaleX;
+      point[1] = atTop + (point[1] - top) * scaleY;
+    }
+  }
+
   toDict() {
     return {
       id: this.id, name: this.name, color: this.color,

@@ -2,13 +2,19 @@
 
 The same app, running anywhere. This folder is the beginning of it.
 
-There is an app now. `index.html` opens the profiles saved in this browser,
-and opening one gets you the inside of a room, in 3D, with containers you can
-pick up and move and shelves you can put things on.
+`index.html` is the app. It opens the profiles saved in this browser, draws
+floor plans, and steps inside a room to show it in 3D with containers you can
+pick up and move.
 
-What it cannot do yet is draw a floor plan, so a profile gets here by being
-exported from the desktop app and opened, or by pressing the button that makes
-one up.
+Everything the desktop app does with a floor plan is here: drawing a room
+corner by corner, the five preset shapes, moving and stretching rooms, pulling
+their corners about, adding and removing corners, locking one so it cannot be
+shoved by accident, dragging containers out inside a room and resizing them,
+tiers, heights, colors, duplicate, delete, and undo. A profile can start from
+nothing here now; it no longer has to come from the desktop app.
+
+What is not here yet is the items screen, and anywhere to see the items that
+are not in a container.
 
 ## Running it
 
@@ -80,7 +86,7 @@ the kind of mistake that survives a review and turns up in a screenshot a week
 later. The palette goes through it as well, so `theme.js` and `theme.py`
 cannot quietly drift into slightly different shades of the same app.
 
-Currently 5,849 cases, all agreeing.
+Currently 6,191 cases, all agreeing.
 
 Run it after any change to either file. A divergence is a bug in one of them,
 and the harness does not care which.
@@ -265,6 +271,47 @@ small job and should happen before this is shown to anyone.
 Plain ES modules. Open the page and it runs. A bundler is a thing that breaks
 and needs maintaining, and nothing here needs one.
 
+## Two fingers are the camera
+
+The desktop app pans with the right mouse button, which a phone does not have.
+So: one finger is the tool, two fingers are the camera, pinching to zoom and
+sliding to pan. That is what every drawing app on a phone does, which means it
+is what hands already expect. On a desktop the wheel zooms, the middle button
+or the space bar pans, and the left button is the tool, which is what hands
+expect there.
+
+A second finger arriving in the middle of a drag takes over, and whatever the
+first one was doing is abandoned rather than finished wherever the second
+finger happens to leave it.
+
+## Checking a canvas
+
+`floor_checks.js` drives the floor plan through the same pointer events a hand
+produces. Fifty-four checks: selecting, moving, stretching from each of the
+eight grips, dragging corners, adding and removing them, all five presets,
+drawing a room corner by corner, adding containers, pinching, and the rules
+that stop a room being turned inside out or a container being dragged through
+a wall.
+
+The first version of these pressed at fractions of the real app's canvas and
+hoped a handle was there. It found two real bugs and then spent longer failing
+for reasons that were the test's fault than the code's, because a resize handle
+is nine pixels wide and "about two thirds across" is not an address. These ask
+the view where a handle actually is and press exactly there.
+
+They earned their keep immediately. **Every handle drag silently did nothing
+on any retina screen.** A drag has to travel a few pixels before it counts, so
+a tap does not nudge what it lands on, and a handle drag skipped that with a
+made-up distance of five, against a threshold of four times the pixel ratio,
+which is eight on the machines most people have. It worked on the one display
+that could not show the bug.
+
+Then `floor.js` was broken on purpose ten different ways to make sure the
+checks noticed. They caught nine. The tenth, a stretch that stopped anchoring
+the far side of the room, went through because the check dragged the
+south-east handle, where anchoring the far side and anchoring nothing look
+identical. There is a check on the north-west handle now.
+
 ## The room view, and one thing it does better than the desktop
 
 `iso.js` is the projection ported from `iso.py`, and `room.js` draws with it.
@@ -305,11 +352,10 @@ same twenty-five lines.
 
 ## What is next
 
-1. **The floor plan canvas**, which is the larger remaining piece and has no
-   head start. Until it exists, nothing can make a room in the browser.
-2. **The items screen**, and somewhere to see the ones not in a container.
-3. **The draw order fix, back in the Python**, per the section above.
-4. **An Import button on the desktop app**, per the gap above.
+1. **The items screen**, and somewhere to see the ones not in any container.
+   It is the last piece the desktop app has and this does not.
+2. **The draw order fix, back in the Python**, per the section above.
+3. **An Import button on the desktop app**, per the gap above.
 
 Rough sizes, from the Python: about 2,000 lines of model and storage, and
 somewhere north of 8,000 of interface. The part underneath is now done.
