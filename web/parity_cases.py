@@ -19,6 +19,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import models as M
 
+# iso.py and theme.py both import PySide6. Only their arithmetic is asked
+# about here, no window is opened and no QApplication is created, so this runs
+# headless wherever the app itself would run.
+#
+# It is optional anyway. models.py needs nothing but the standard library, and
+# a machine that has not installed the app's requirements should still be able
+# to check the half of the port that does not care. The JavaScript side is
+# told which half it got and says so out loud, because a harness that quietly
+# skips work and prints "all agreed" is worse than one that fails.
+try:
+    import iso as I
+    import theme
+    HAVE_QT = True
+except ImportError:
+    I = theme = None
+    HAVE_QT = False
+
 
 def shapes():
     """Every preset, plus hand-built awkward ones, plus random polygons."""
@@ -190,9 +207,137 @@ def main():
                                  "answer": M.Item.from_dict(
                                      json.loads(json.dumps(raw))).to_dict()})
 
+    if HAVE_QT:
+        iso_cases(cases, rng)
+    else:
+        print("PySide6 is not installed here, so the projection and the "
+              "palette are not covered.\n"
+              "  pip install -r requirements.txt", file=sys.stderr)
+
     total = sum(len(v) for v in cases.values() if isinstance(v, list))
     print(json.dumps(cases), file=sys.stdout)
     print(f"{total} cases", file=sys.stderr)
+
+
+def point(qpoint):
+    return [qpoint.x(), qpoint.y()]
+
+
+def shape(qpolygon):
+    return [point(qpolygon.at(at)) for at in range(qpolygon.count())]
+
+
+def rect(qrect):
+    return [qrect.x(), qrect.y(), qrect.width(), qrect.height()]
+
+
+def iso_cases(cases, rng):
+    """The projection, the wall culling and the draw order.
+
+    Same idea as everything above: the Python answers, the JavaScript answers,
+    and any disagreement is a bug in one of them. This half matters as much as
+    the model half, because getting a sign wrong here does not throw. It draws
+    a room inside out, which is the kind of thing that survives review and gets
+    noticed on a screenshot a week later.
+    """
+    from PySide6.QtCore import QPointF
+
+    cases["project"] = []
+    for _ in range(300):
+        x = round(rng.uniform(-400, 400), 3)
+        y = round(rng.uniform(-400, 400), 3)
+        z = round(rng.uniform(0, 160), 3)
+        cases["project"].append({"xyz": [x, y, z], "answer": point(I.project(x, y, z))})
+
+    cases["floor_at"] = []
+    for _ in range(300):
+        sx = round(rng.uniform(-500, 500), 3)
+        sy = round(rng.uniform(-500, 500), 3)
+        cases["floor_at"].append(
+            {"screen": [sx, sy], "answer": point(I.floor_at(QPointF(sx, sy)))})
+
+    cases["faces"] = []
+    for _ in range(120):
+        x = round(rng.uniform(-200, 300), 2)
+        y = round(rng.uniform(-200, 300), 2)
+        w = round(rng.uniform(20, 180), 2)
+        d = round(rng.uniform(20, 180), 2)
+        h = round(rng.uniform(0, 120), 2)
+        cases["faces"].append({
+            "box": [x, y, w, d, h],
+            "top": shape(I.top_face(x, y, w, d, h)),
+            "left": shape(I.left_face(x, y, w, d, h)),
+            "right": shape(I.right_face(x, y, w, d, h)),
+            "outline": shape(I.box_outline(x, y, w, d, h)),
+            "footprint": list(I.box_footprint(x, y, w, d)),
+        })
+    # A flat box, where box_outline takes its other branch.
+    cases["faces"].append({
+        "box": [10, 20, 40, 30, 0],
+        "top": shape(I.top_face(10, 20, 40, 30, 0)),
+        "left": shape(I.left_face(10, 20, 40, 30, 0)),
+        "right": shape(I.right_face(10, 20, 40, 30, 0)),
+        "outline": shape(I.box_outline(10, 20, 40, 30, 0)),
+        "footprint": list(I.box_footprint(10, 20, 40, 30)),
+    })
+
+    cases["walls"] = []
+    for label, points in shapes():
+        # Every room turned every way up. Winding depends on the order the
+        # corners were listed in, and half of these presets go one way and half
+        # the other, so reversing each one doubles the coverage of the branch
+        # that has already been wrong twice.
+        for turned, listing in (("as listed", points), ("reversed", points[::-1])):
+            corners = [tuple(p) for p in listing]
+            walls = I.far_walls(corners)
+            cases["walls"].append({
+                "label": f"{label} {turned}",
+                "points": [list(p) for p in listing],
+                "winding": I.winding(corners),
+                "far": [[list(a), list(b)] for a, b in walls],
+                "footprints": [list(I.wall_footprint(w)) for w in walls],
+                "depths": [I.footprint_depth(I.wall_footprint(w)) for w in walls],
+                # Twice: once with nothing in the room, once with something
+                # taller than the walls, which is the case that used to crop
+                # the top off a full-height cabinet.
+                "bounds_empty": rect(I.room_bounds(corners, I.WALL_HEIGHT, 0.0)),
+                "bounds_tall": rect(I.room_bounds(corners, I.WALL_HEIGHT, 90.0)),
+            })
+
+    cases["color"] = []
+    for base in ["#4f7cff", "#33d6a0", "#f0a726", "#000000", "#ffffff", "#7a1b2c"]:
+        for amount in [0.0, 0.05, 0.26, 0.5, 0.74, 1.0, -0.16, -0.32]:
+            cases["color"].append({
+                "hex": base, "amount": amount,
+                "mix_white": theme.mix(base, "#ffffff", abs(amount)),
+                "mix_black": theme.mix(base, "#000000", abs(amount)),
+            })
+
+    # The palette itself, name by name. theme.js has to write these values out
+    # a second time, because a browser cannot read a Python file and there is
+    # no build step to generate one. What this stops is the second copy
+    # quietly drifting: nobody notices a hex digit, and six months later the
+    # two programs are slightly different shades of the same app.
+    cases["palette"] = {name: getattr(theme, name) for name in [
+        "BG_APP", "BG_SIDEBAR", "BG_PANEL", "BG_CARD", "BG_INPUT", "BG_HOVER",
+        "BG_ACTIVE", "BORDER", "BORDER_LIGHT", "TEXT", "TEXT_MUTED",
+        "TEXT_FAINT", "ACCENT", "ACCENT_HOVER", "ACCENT_SOFT", "DANGER",
+        "DANGER_HOVER", "SUCCESS", "WARNING", "CANVAS_BG", "GRID_MINOR",
+        "GRID_MAJOR", "CANVAS_ORIGIN", "SWATCHES", "SPACE_XS", "SPACE_SM",
+        "SPACE_MD", "SPACE_LG", "SPACE_XL", "RADIUS_SM", "RADIUS_MD",
+        "RADIUS_LG", "FONT_SIZE", "FONT_SIZE_SM", "FONT_SIZE_LG",
+        "FONT_SIZE_XL", "GRID_SIZE", "GRID_MAJOR_EVERY",
+    ]}
+
+    # And the two numbers in iso.py that decide how a room looks. A wall
+    # height that differs between the programs is not a bug anything would
+    # throw on; it just means the browser draws a different room.
+    cases["iso_constants"] = {
+        "WALL_HEIGHT": I.WALL_HEIGHT,
+        "TOP_LIGHT": I.TOP_LIGHT,
+        "LEFT_LIGHT": I.LEFT_LIGHT,
+        "RIGHT_LIGHT": I.RIGHT_LIGHT,
+    }
 
 
 if __name__ == "__main__":

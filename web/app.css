@@ -1,0 +1,254 @@
+/*
+ * app.css
+ * =======
+ *
+ * Every color and every spacing number in here comes from theme.js, which
+ * writes them onto the document as custom properties before anything is
+ * drawn. So this file says var(--accent) and never #4f7cff, and there is one
+ * place a color is written down rather than three.
+ *
+ * Laid out for a phone first and widened with one media query, because the
+ * whole reason the browser version exists is that it runs on a phone. The
+ * room view is the part that needs the room: below 760px the panel goes under
+ * the canvas instead of beside it.
+ */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-app);
+  color: var(--text);
+  font: var(--size)/1.55 var(--font);
+  /* Safari draws behind the notch with viewport-fit=cover, which is what
+     makes a page look like an app rather than a web page in a frame. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+  -webkit-text-size-adjust: 100%;
+}
+
+#app { height: 100%; display: flex; flex-direction: column; }
+
+/* -- shared furniture ------------------------------------------------------ */
+
+button {
+  font: inherit;
+  font-weight: 600;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  cursor: pointer;
+  /* A tap target under about 44px is one people miss, and missing a button
+     in a list of rooms means opening the wrong room. */
+  min-height: 38px;
+}
+button:hover { background: var(--bg-hover); }
+button:active { background: var(--bg-active); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-hover); }
+button.quiet { background: none; border-color: transparent; color: var(--text-muted); }
+button.quiet:hover { background: var(--bg-hover); color: var(--text); }
+button.danger { color: var(--danger); }
+button.danger:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+button.small { padding: 5px 10px; min-height: 30px; font-size: var(--size-sm); }
+button:disabled { opacity: .45; cursor: default; }
+
+input[type=text], input[type=password], input[type=number] {
+  font: inherit;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  /* Flex items will not shrink below the width of their own content, and an
+     input's content width comes from its size attribute. Without these, one
+     text box pushes a whole panel sideways on a phone. */
+  min-width: 0;
+  flex: 1 1 0;
+  width: 0;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.row { display: flex; gap: var(--space-sm); align-items: center; flex-wrap: wrap; }
+.row.tight { gap: var(--space-xs); }
+.grow { flex: 1 1 auto; min-width: 0; }
+.muted { color: var(--text-muted); }
+.faint { color: var(--text-faint); }
+.small { font-size: var(--size-sm); }
+.warn { color: var(--warning); }
+.bad { color: var(--danger); }
+.good { color: var(--success); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.bar h1 { font-size: var(--size-lg); margin: 0; letter-spacing: -.01em; }
+.bar .where { color: var(--text-muted); font-size: var(--size-sm); }
+
+.screen { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.pad { padding: var(--space-lg); }
+.limit { max-width: 760px; margin: 0 auto; }
+
+h2 { font-size: var(--size-lg); margin: var(--space-xl) 0 var(--space-sm); }
+h2:first-child { margin-top: 0; }
+
+.note {
+  color: var(--text-faint);
+  font-size: var(--size-sm);
+  margin: var(--space-sm) 0;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+}
+
+.swatch {
+  width: 12px; height: 12px; border-radius: 3px;
+  flex: none; display: inline-block;
+}
+
+/* -- the launcher ---------------------------------------------------------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-md);
+}
+
+.tile { display: flex; flex-direction: column; gap: var(--space-sm); }
+.tile .open {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: 400;
+  min-height: 0;
+}
+.tile .open:hover { background: none; }
+.tile .open:hover .name { color: var(--accent-hover); }
+.tile .name { font-weight: 600; font-size: var(--size-lg); }
+.tile .stat { color: var(--text-muted); font-size: var(--size-sm); }
+
+.notice {
+  border-left: 3px solid var(--warning);
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-sm) 0;
+  font-size: var(--size-sm);
+}
+.notice.bad { border-left-color: var(--danger); }
+
+.code {
+  font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
+  font-size: var(--size-lg);
+  letter-spacing: .08em;
+  color: var(--success);
+  background: var(--bg-input);
+  border: 1px solid var(--success);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin: var(--space-sm) 0;
+  display: inline-block;
+  overflow-wrap: anywhere;
+}
+
+/* -- inside a profile ------------------------------------------------------ */
+
+.workspace { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+
+.chips {
+  display: flex;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex: none;
+  /* A row of rooms can be longer than the screen. Letting it scroll sideways
+     beats wrapping it into three lines that push the room off the top. */
+  scrollbar-width: thin;
+}
+.chips button { white-space: nowrap; }
+.chips button.on { background: var(--accent-soft); border-color: var(--accent); }
+
+.split { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+
+.stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 240px;
+  background: var(--canvas-bg);
+}
+.stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* pan-y so a finger can still scroll the page vertically, while a drag
+     across a container is the canvas's. Without this the whole page moves
+     when somebody tries to shift a shelf. */
+  touch-action: pan-y;
+}
+.stage .empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); text-align: center; padding: var(--space-xl);
+}
+
+.panel {
+  flex: none;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  padding: var(--space-md);
+  overflow-y: auto;
+  max-height: 46%;
+}
+.panel h3 { margin: 0 0 var(--space-sm); font-size: var(--size); }
+
+.items { display: flex; flex-direction: column; gap: var(--space-xs); }
+.item {
+  display: flex; align-items: center; gap: var(--space-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+.item .qty {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: var(--size-sm);
+}
+
+.dots { display: flex; gap: 5px; flex-wrap: wrap; }
+.dots button {
+  width: 22px; height: 22px; min-height: 22px; padding: 0;
+  border-radius: 50%; border: 2px solid transparent;
+}
+.dots button.on { border-color: var(--text); }
+
+@media (min-width: 760px) {
+  .split { flex-direction: row; }
+  .panel {
+    width: 320px;
+    flex: none;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+    max-height: none;
+  }
+}

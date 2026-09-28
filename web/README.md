@@ -2,24 +2,27 @@
 
 The same app, running anywhere. This folder is the beginning of it.
 
-Nothing here draws anything yet. What exists is the part underneath: the
-records, the save format and the geometry, ported from `models.py` and checked
-against it case by case, and the saving, which keeps the same backups and the
-same rescues as the desktop app.
+There is an app now. `index.html` opens the profiles saved in this browser,
+and opening one gets you the inside of a room, in 3D, with containers you can
+pick up and move and shelves you can put things on.
+
+What it cannot do yet is draw a floor plan, so a profile gets here by being
+exported from the desktop app and opened, or by pressing the button that makes
+one up.
 
 ## Running it
 
-Open `dev.html` and you get a page that checks the model works in a browser,
-reads a save file from the desktop app, checks the saving, and lets you keep a
-profile in the browser and watch it survive a reload.
+**`index.html` is the app.** **`dev.html` next door is the workbench**: a page
+that checks the model and the saving work in this browser, reads a save file
+from the desktop app, and lets you watch a profile survive a reload.
 
-**Do not double-click it.** Opening it from Explorer gives the browser a
-`file://` address, and browsers refuse to load JavaScript modules over
-`file://`. The error mentions "CORS policy" and looks like broken code when
-it is not. Everyone hits this once.
+**Do not double-click either of them.** Opening a page from Explorer gives the
+browser a `file://` address, and browsers refuse to load JavaScript modules
+over `file://`. The error mentions "CORS policy" and looks like broken code
+when it is not. Everyone hits this once.
 
 In VS Code: Extensions in the left bar, search **Live Server**, install it.
-Then right-click `dev.html` and choose **Open with Live Server**. It opens on
+Then right-click `index.html` and choose **Open with Live Server**. It opens on
 `http://127.0.0.1:5500/` and reloads whenever you save, which is most of what
 makes this pleasant.
 
@@ -68,10 +71,16 @@ node web/parity.mjs
 `parity_cases.py` builds a few thousand cases, every room preset plus a
 fireplace divot, a narrow spike, a sliver, a room at negative coordinates and
 some random polygons, crossed with rectangles both sensible and absurd. It
-answers each one with `models.py` and writes the answers out.
-`parity.mjs` answers the same cases with `model.js` and compares.
+answers each one with `models.py` and `iso.py` and writes the answers out.
+`parity.mjs` answers the same cases with `model.js` and `iso.js` and compares.
 
-Currently 3,844 cases, all agreeing.
+It covers the projection too, which matters more than it sounds: getting a
+sign wrong in there does not throw, it draws a room inside out, and that is
+the kind of mistake that survives a review and turns up in a screenshot a week
+later. The palette goes through it as well, so `theme.js` and `theme.py`
+cannot quietly drift into slightly different shades of the same app.
+
+Currently 5,849 cases, all agreeing.
 
 Run it after any change to either file. A divergence is a bug in one of them,
 and the harness does not care which.
@@ -256,13 +265,50 @@ small job and should happen before this is shown to anyone.
 Plain ES modules. Open the page and it runs. A bundler is a thing that breaks
 and needs maintaining, and nothing here needs one.
 
+## The room view, and one thing it does better than the desktop
+
+`iso.js` is the projection ported from `iso.py`, and `room.js` draws with it.
+Most of it is the same file in another language. One part is not, and it is
+worth knowing about because the same fix belongs in the Python.
+
+**Walls kept being drawn over the containers standing in front of them.** The
+desktop app sorts everything by a depth number, `x + y` of a corner, and draws
+in that order. That has now failed three different ways:
+
+- Sorting by the FAR corner breaks on walls. A wall runs the whole length of a
+  side of a room, so it is nearer than some of what shares the room and
+  further than the rest, and no single number says where it belongs.
+- Cutting the wall into short pieces so each gets its own number, which is
+  what the portfolio demo does, swaps one failure for another: a piece three
+  quarters along the back wall now has a big number, and a container in the
+  far corner has a small one, so the wall is drawn over the container it
+  stands behind.
+- Sorting by the NEAR corner breaks on wide objects. A shelf 400 long against
+  the back wall has a nearer near-corner than a small bin in front of it, so
+  the shelf covers the bin.
+
+All three were tried. Each drew a correct picture in the room it was tested in
+and a wrong one in the next.
+
+The answer is that "behind" is not a number, it is a relation between two
+things, and for footprints on a floor seen down the diagonal it is exact:
+
+> A is behind B if A ends before B starts in x, or in y.
+
+One axis is enough. That relation is a graph, and the drawing order is a
+topological sort of it, which sounds heavier than it is: a room has a handful
+of walls and a handful of containers, so it is a few hundred comparisons for a
+whole frame, and it is right rather than right-so-far. `iso.paintOrder`.
+
+`room_view_3d.py` still sorts by a number and still has the bug. It is the
+same twenty-five lines.
+
 ## What is next
 
-1. **The room view**, which mostly exists already. The demo on the portfolio
-   site is the projection, the wall culling and the containment test running
-   in a canvas. It needs to read this model instead of its own flattened one.
-2. **The floor plan canvas**, which is the larger piece and has no head start.
-3. **The items screen.**
+1. **The floor plan canvas**, which is the larger remaining piece and has no
+   head start. Until it exists, nothing can make a room in the browser.
+2. **The items screen**, and somewhere to see the ones not in a container.
+3. **The draw order fix, back in the Python**, per the section above.
 4. **An Import button on the desktop app**, per the gap above.
 
 Rough sizes, from the Python: about 2,000 lines of model and storage, and

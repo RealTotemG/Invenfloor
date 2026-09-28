@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Invenfloor</title>
+<link rel="stylesheet" href="app.css">
+
+<!--
+  Invenfloor in a browser.
+
+  THIS WILL NOT WORK IF YOU DOUBLE-CLICK IT.
+  ------------------------------------------
+  Opening it from Explorer gives the browser a file:// address, and browsers
+  refuse to load ES modules over file:// for security reasons. The error in
+  the console says "CORS policy" and has nothing to do with the code.
+
+  In VS Code: install the Live Server extension, right-click this file and
+  choose "Open with Live Server".
+
+  What is here: the launcher, and the inside of a room. There is no way to
+  draw a new floor plan yet, so a profile gets here by being exported from the
+  desktop app and imported below. dev.html next door is the workbench that
+  checks the pieces underneath this.
+-->
+</head>
+<body>
+
+<div id="app">
+  <!-- Every screen lives in here and is built by app.js. The markup is this
+       short on purpose: one place that puts elements on the page beats markup
+       here and more of it in the script, which is how a page ends up with two
+       ideas about what it currently shows. -->
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
