@@ -46,6 +46,7 @@ import {
   icon, toolButton,
 } from "./ui.js";
 import { footer, watchForErrors } from "./about.js";
+import { tagRow } from "./tags.js";
 
 T.apply();
 
@@ -99,7 +100,8 @@ let history = null;
 let saveTimer = null;
 let saveTrouble = "";
 let corners = 0;           // corners placed so far in a half-drawn room
-const itemsState = { search: "", filter: "all", chosenId: null };
+const itemsState = { search: "", filter: "all", chosenId: null,
+                     tagId: null, editingTags: false };
 
 // Is the open profile one of the saved ones? False for the made-up house and
 // for a file opened when there is nowhere to put it. Changes to those are
@@ -381,6 +383,8 @@ function openProfile(found, isKept = true) {
   saveTrouble = "";
   itemsState.search = "";
   itemsState.filter = "all";
+  itemsState.tagId = null;
+  itemsState.editingTags = false;
   itemsState.chosenId = null;
   showWorkspace();
 }
@@ -1081,6 +1085,36 @@ function roomPanel(panel, chosen) {
       touched(); view.draw(); drawPanel();
     }, { step: T.GRID_SIZE, min: T.GRID_SIZE })));
 
+  // Where it sits, not just how big it is.
+  //
+  // Size without position is a trap rather than half a feature. Sketch three
+  // rooms roughly, then type their real dimensions, and each one grows from
+  // its top-left corner into whatever is beside it, with dragging as the only
+  // way back. Typing the real size is the obvious thing to do and it reliably
+  // made a mess.
+  put(panel, put(el("div", "row"),
+    numberField("X", chosen.x, value => {
+      chosen.x = Math.round(value);
+      touched(); view.draw(); drawPanel();
+    }, { step: T.GRID_SIZE }),
+    numberField("Y", chosen.y, value => {
+      chosen.y = Math.round(value);
+      touched(); view.draw(); drawPanel();
+    }, { step: T.GRID_SIZE })));
+
+  // And say so when it is sitting on top of a neighbour. A warning rather
+  // than a refusal: two rooms on the same spot is nearly always a mistake,
+  // but a mezzanine or a stairwell drawn over the room below it is not, and
+  // an app that will not let you draw your own building is worse than one
+  // that raises an eyebrow.
+  const sittingOn = M.roomsOverlapping(floor, chosen);
+  if (sittingOn.length) {
+    put(panel, notice(
+      `This is sitting on top of ${sittingOn.map(r => M.short(r.name, 18))
+        .join(", ")}. Rooms are allowed to overlap, but if you did not mean `
+      + "it, the X and Y above will move this one out of the way.", true));
+  }
+
   const lock = el("label", "check");
   const tick = el("input");
   tick.type = "checkbox";
@@ -1093,6 +1127,16 @@ function roomPanel(panel, chosen) {
   });
   put(lock, tick, el("span", "small", "Locked, so it cannot be moved by accident"));
   put(panel, lock);
+
+  // A tag on a room says what belongs in it, which is the half of the idea
+  // that makes "In the wrong room" able to answer anything at all. Tag the
+  // Garage with Tools, tag a spanner with Tools, leave the spanner in the
+  // kitchen, and the items screen can now say so.
+  put(panel, el("h4", null, "What belongs in here"));
+  put(panel, tagRow(profile, chosen, {
+    changed: () => { touched(); view.draw(); },
+    again: () => drawPanel(),
+  }));
 
   // Step inside goes through the view rather than setting anything here, so
   // that it lands in steppedInto() like a double-click on the canvas does and
@@ -1180,6 +1224,12 @@ function containerPanel(panel, chosen) {
       touched();
       view.draw();
     }));
+
+  put(panel, el("h4", null, "Tags"));
+  put(panel, tagRow(profile, chosen, {
+    changed: () => { touched(); view.draw(); },
+    again: () => drawPanel(),
+  }));
 
   contentsPanel(panel, profile, chosen, {
     changed: () => { touched(); view.draw(); },

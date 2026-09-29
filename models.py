@@ -834,6 +834,81 @@ def fit_in_room(room, x, y, width, height, stay=None):
     return stay
 
 
+def room_outline(room):
+    """A room's corners in FLOOR coordinates, not its own.
+
+    A room's points are relative to its own x and y, which is what lets you
+    drag one around without rewriting every corner. Comparing two rooms means
+    putting both in the same coordinates first, and forgetting to is how you
+    get two rooms that look separated on screen and identical to the maths.
+    """
+    return [(x + room.x, y + room.y) for x, y in room.points]
+
+
+def rooms_overlap(first, second):
+    """Do these two rooms cover any of the same floor?
+
+    Bounding boxes would be quicker and would lie: two L-shapes can have
+    boxes that overlap while the rooms themselves sit comfortably apart, and
+    a warning that cries wolf gets ignored, which is worse than no warning.
+
+    So it is the real test, which is three questions rather than one:
+
+      1. does any wall of one cross any wall of the other
+      2. is a corner of one inside the other
+      3. is a corner of the other inside the one
+
+    The second and third are not the same question asked twice. One room
+    entirely inside another crosses no walls at all, and only one of the two
+    has corners inside the other.
+    """
+    ours = room_outline(first)
+    theirs = room_outline(second)
+    if len(ours) < 3 or len(theirs) < 3:
+        return False
+
+    for a, b in walls_of(ours):
+        for c, d in walls_of(theirs):
+            if segments_cross(a, b, c, d):
+                return True
+
+    if any(point_in_polygon(theirs, px, py) for px, py in _just_inside(ours)):
+        return True
+    if any(point_in_polygon(ours, px, py) for px, py in _just_inside(theirs)):
+        return True
+    return False
+
+
+def _just_inside(outline):
+    """Every corner, nudged a hair towards the middle of its own shape.
+
+    The corners themselves are the wrong thing to ask about, and this is the
+    whole difficulty of the function above. Two rooms side by side share a
+    wall, so two of one room's corners sit exactly ON the other's outline, and
+    point_in_polygon counts a point on the boundary as inside. Asked with the
+    raw corners, every pair of neighbouring rooms in a correctly drawn plan
+    reports as overlapping, and a warning that fires on the normal case is a
+    warning nobody reads.
+
+    What is actually being asked is whether a corner is in the other room's
+    INTERIOR. Moving it a thousandth of the way towards its own centre is how
+    you ask that: a corner that was only touching steps off the line, and one
+    that was genuinely inside stays inside.
+    """
+    xs = [x for x, _ in outline]
+    ys = [y for _, y in outline]
+    middle_x = (min(xs) + max(xs)) / 2
+    middle_y = (min(ys) + max(ys)) / 2
+    return [(x + (middle_x - x) * 0.001, y + (middle_y - y) * 0.001)
+            for x, y in outline]
+
+
+def rooms_overlapping(floor, room):
+    """Every other room on this floor that `room` is sitting on top of."""
+    return [other for other in floor.rooms
+            if other is not room and rooms_overlap(room, other)]
+
+
 def nearest_fit(room, x, y, width, height):
     """The closest spot to (x, y) where a container this size actually fits.
 

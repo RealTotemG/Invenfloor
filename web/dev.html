@@ -25,6 +25,17 @@
   right-click this file and choose "Open with Live Server".
 -->
 
+<!-- The app's own stylesheet, first, so that anything this page styles for
+     itself still wins underneath.
+
+     It was not here at all until now, and that was quietly a problem: the
+     checks below build real bits of the app in a bench on this page and ask
+     questions about them, and without this they were doing it under a
+     completely different set of rules. Any check about what something looks
+     like or how wide it is was answering about the workbench rather than the
+     app, which is worse than not asking. -->
+<link rel="stylesheet" href="app.css">
+
 <style>
 :root {
   color-scheme: dark;

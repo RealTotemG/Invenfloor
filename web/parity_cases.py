@@ -534,6 +534,50 @@ def iso_cases(cases, rng):
         "footprint": list(I.box_footprint(10, 20, 40, 30)),
     })
 
+    # Which rooms are sitting on top of each other. Every arrangement two
+    # rooms can be in, named, because the ones that must NOT report as
+    # overlapping are the whole difficulty: neighbours share a wall, and a
+    # warning that fires on a correctly drawn plan is one nobody reads.
+    cases["overlap"] = []
+
+    def placed(name, points, x=0, y=0):
+        room = M.Room(id=name, name=name, points=[list(p) for p in points])
+        room.x = x
+        room.y = y
+        return room
+
+    square = M.rectangle_points(100, 100)
+    ell = M.l_shape_points(200, 200)
+    for label, first, second in [
+        ("half on top of each other", placed("a", square), placed("b", square, 50)),
+        ("well apart", placed("a", square), placed("b", square, 200)),
+        ("one wholly inside the other",
+         placed("a", square), placed("b", M.rectangle_points(20, 20), 10, 10)),
+        ("neighbours sharing a wall", placed("a", square), placed("b", square, 100)),
+        ("neighbours sharing a wall, stacked",
+         placed("a", square), placed("b", square, 0, 100)),
+        ("exactly on top of each other", placed("a", square), placed("b", square)),
+        ("touching at a single corner",
+         placed("a", square), placed("b", square, 100, 100)),
+        ("one unit apart", placed("a", square), placed("b", square, 101)),
+        ("a square over an L's body",
+         placed("a", ell), placed("b", M.rectangle_points(60, 60), 10, 10)),
+        ("a square in an L's notch",
+         placed("a", ell), placed("b", M.rectangle_points(60, 60), 130, 10)),
+        ("a room with too few corners",
+         placed("a", square), placed("b", [(0, 0), (10, 0)])),
+    ]:
+        cases["overlap"].append({
+            "label": label,
+            "first": {"points": [list(p) for p in first.points],
+                      "x": first.x, "y": first.y},
+            "second": {"points": [list(p) for p in second.points],
+                       "x": second.x, "y": second.y},
+            "outline": [list(p) for p in M.room_outline(first)],
+            "answer": M.rooms_overlap(first, second),
+            "both_ways": M.rooms_overlap(second, first),
+        })
+
     cases["walls"] = []
     for label, points in shapes():
         # Every room turned every way up. Winding depends on the order the

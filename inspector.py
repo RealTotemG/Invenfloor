@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 import theme
 from floor_items import EDIT_MOVE, EDIT_RESIZE, EDIT_VERTICES
 from models import (
-    CONTAINER_HEIGHTS, Container, Item, Room, height_name, short,
+    CONTAINER_HEIGHTS, Container, Item, Room, height_name,
+    rooms_overlapping, short,
 )
 from widgets import (
     ColorPicker, ItemDialog, MoveToTierDialog, TagChipRow, TagPickerDialog,
@@ -464,6 +465,86 @@ class Inspector(QWidget):
         row.addWidget(_dim_label("W"))
         row.addWidget(height_field, 1)
         layout.addLayout(row)
+
+        self._position_block(layout, room)
+        self._overlap_warning(layout, room)
+
+    def _position_block(self, layout, room):
+        """Where the room sits on the floor, as two numbers.
+
+        Size without position is a trap rather than half a feature. Sketch
+        three rooms roughly, then type their real measurements, and each one
+        grows from its top-left corner into whatever is beside it, with
+        dragging as the only way back. Typing the real size is the obvious
+        thing to do and it reliably made a mess.
+        """
+        layout.addWidget(label("Position", "caption"))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.SPACE_SM)
+
+        x_field = QSpinBox()
+        y_field = QSpinBox()
+        for field, value in ((x_field, room.x), (y_field, room.y)):
+            field.setRange(-20000, 20000)
+            field.setEnabled(not room.locked)
+            field.setMinimumWidth(60)
+            field.setSingleStep(theme.GRID_SIZE)
+            field.blockSignals(True)
+            field.setValue(int(round(value)))
+            field.blockSignals(False)
+
+        def apply_position():
+            room.x = float(x_field.value())
+            room.y = float(y_field.value())
+            self.dataChanged.emit()
+            # Rebuilt rather than nudged, because moving a room is exactly
+            # what changes whether it is sitting on another one, and the line
+            # that says so is a few widgets further down.
+            self.show_selection(room)
+
+        x_field.valueChanged.connect(apply_position)
+        y_field.valueChanged.connect(apply_position)
+
+        row.addWidget(_dim_label("X"))
+        row.addWidget(x_field, 1)
+        row.addWidget(_dim_label("Y"))
+        row.addWidget(y_field, 1)
+        layout.addLayout(row)
+
+    def _overlap_warning(self, layout, room):
+        """Say when this room is sitting on top of another one.
+
+        A warning rather than a refusal. Two rooms on the same patch of floor
+        is nearly always a mistake, but a mezzanine, a stairwell or a boxed-in
+        void drawn over the room below is not, and an app that will not let
+        somebody draw their own building is worse than one that raises an
+        eyebrow.
+        """
+        floor = self._floor_holding(room)
+        if floor is None:
+            return
+        sitting_on = rooms_overlapping(floor, room)
+        if not sitting_on:
+            return
+
+        names = ", ".join(short(other.name, 18) for other in sitting_on)
+        warning = wrapped(QLabel(
+            f"This is sitting on top of {names}. Rooms are allowed to "
+            f"overlap, but if you did not mean it, the position above will "
+            f"move this one out of the way."))
+        warning.setStyleSheet(
+            f"color: {theme.WARNING}; font-size: {theme.FONT_SIZE_SM}px;")
+        layout.addWidget(warning)
+
+    def _floor_holding(self, room):
+        """Which floor this room is on, or None if it is not on any of them."""
+        if self.profile is None:
+            return None
+        for floor in self.profile.floors:
+            if any(other is room for other in floor.rooms):
+                return floor
+        return None
 
     def room_resized(self, room):
         """The canvas resized a room. Catch the two boxes up.

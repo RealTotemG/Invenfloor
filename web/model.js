@@ -815,6 +815,78 @@ export class Room {
 
 /** Kept as a function so fitInRoom can take anything with `points` rather
  *  than only a real Room. The demo passes a bare object. */
+/** A room's corners in FLOOR coordinates, not its own.
+ *
+ *  A room's points are relative to its own x and y, which is what lets you
+ *  drag one around without rewriting every corner. Comparing two rooms means
+ *  putting both in the same coordinates first, and forgetting to is how you
+ *  get two rooms that look separated on screen and identical to the maths.
+ */
+export function roomOutline(room) {
+  return room.points.map(([x, y]) => [x + room.x, y + room.y]);
+}
+
+/** Every corner, nudged a hair towards the middle of its own shape.
+ *
+ *  The corners themselves are the wrong thing to ask about, and this is the
+ *  whole difficulty of roomsOverlap below. Two rooms side by side share a
+ *  wall, so two of one room's corners sit exactly ON the other's outline, and
+ *  pointInPolygon counts a point on the boundary as inside. Asked with the
+ *  raw corners, every pair of neighbouring rooms in a correctly drawn plan
+ *  reports as overlapping, and a warning that fires on the normal case is a
+ *  warning nobody reads.
+ *
+ *  What is actually being asked is whether a corner is in the other room's
+ *  INTERIOR. Moving it a thousandth of the way towards its own centre is how
+ *  you ask that: a corner that was only touching steps off the line, and one
+ *  that was genuinely inside stays inside.
+ */
+function justInside(outline) {
+  const xs = outline.map(([x]) => x);
+  const ys = outline.map(([, y]) => y);
+  const middleX = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const middleY = (Math.min(...ys) + Math.max(...ys)) / 2;
+  return outline.map(([x, y]) =>
+    [x + (middleX - x) * 0.001, y + (middleY - y) * 0.001]);
+}
+
+/** Do these two rooms cover any of the same floor?
+ *
+ *  Bounding boxes would be quicker and would lie: two L-shapes can have boxes
+ *  that overlap while the rooms themselves sit comfortably apart, and a
+ *  warning that cries wolf gets ignored, which is worse than no warning.
+ *
+ *  So it is the real test, which is three questions rather than one:
+ *
+ *    1. does any wall of one cross any wall of the other
+ *    2. is a corner of one inside the other
+ *    3. is a corner of the other inside the one
+ *
+ *  The second and third are not the same question asked twice. One room
+ *  entirely inside another crosses no walls at all, and only one of the two
+ *  has corners inside the other.
+ */
+export function roomsOverlap(first, second) {
+  const ours = roomOutline(first);
+  const theirs = roomOutline(second);
+  if (ours.length < 3 || theirs.length < 3) return false;
+
+  for (const [a, b] of wallsOf(ours)) {
+    for (const [c, d] of wallsOf(theirs)) {
+      if (segmentsCross(a, b, c, d)) return true;
+    }
+  }
+
+  if (justInside(ours).some(([x, y]) => pointInPolygon(theirs, x, y))) return true;
+  if (justInside(theirs).some(([x, y]) => pointInPolygon(ours, x, y))) return true;
+  return false;
+}
+
+/** Every other room on this floor that `room` is sitting on top of. */
+export function roomsOverlapping(floor, room) {
+  return floor.rooms.filter(other => other !== room && roomsOverlap(room, other));
+}
+
 export function boundsOf(room) {
   if (!room.points || !room.points.length) return [0, 0, 0, 0];
   const xs = room.points.map(p => p[0]), ys = room.points.map(p => p[1]);

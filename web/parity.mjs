@@ -300,6 +300,19 @@ for (const c of cases.faces) {
         I.boxFootprint(c.box[0], c.box[1], c.box[2], c.box[3]));
 }
 
+// -- which rooms are sitting on top of each other ---------------------------
+for (const c of cases.overlap) {
+  const first = { ...c.first };
+  const second = { ...c.second };
+  check("room_outline", c.label, c.outline, M.roomOutline(first));
+  check("rooms_overlap", c.label, c.answer, M.roomsOverlap(first, second));
+  // Asked the other way round as well. The test is three questions and two
+  // of them are each other's mirror, so an implementation that dropped one
+  // would answer correctly in one direction and not the other.
+  check("rooms_overlap, the other way round", c.label, c.both_ways,
+        M.roomsOverlap(second, first));
+}
+
 // -- which walls, and where they land in the order --------------------------
 for (const c of cases.walls) {
   check("winding", c.label, c.winding, I.winding(c.points));

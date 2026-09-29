@@ -177,6 +177,85 @@ def main():
     check("and the panel clears it by itself, without being told",
           alone.focused_room_id is None, str(alone.focused_room_id))
 
+    # -- where a room sits, and when it is on top of another ----------------
+    # Size without position was the trap: type a room's real measurements and
+    # it grows from its top-left into its neighbour, with dragging the only
+    # way back. These check the boxes exist and that the warning can tell a
+    # neighbour from a collision, which is the part that decides whether
+    # anybody reads it.
+    from PySide6.QtWidgets import QLabel, QSpinBox
+    import models as M
+
+    fresh = a_profile()
+    ground = fresh.floors[0]
+    garage, workshop = ground.rooms
+
+    section.set_profile(fresh)
+    settle()
+    section.inspector.show_selection(workshop)
+    settle()
+
+    captions = [found.text() for found in section.inspector.findChildren(QLabel)
+                if found.text() in ("Size", "Position", "L", "W", "X", "Y")]
+    check("a room has boxes for where it is as well as how big it is",
+          captions == ["Size", "L", "W", "Position", "X", "Y"], str(captions))
+    check("and there are four of them to type in",
+          len(section.inspector.findChildren(QSpinBox)) == 4,
+          f"{len(section.inspector.findChildren(QSpinBox))} boxes")
+
+    def panel_says(phrase):
+        return any(phrase in found.text()
+                   for found in section.inspector.findChildren(QLabel))
+
+    check("two rooms side by side are not called an overlap",
+          not panel_says("sitting on top"),
+          "it warns about rooms that only share a wall, which is what "
+          "neighbouring rooms do")
+
+    # a_profile bakes the 400 of separation into the Workshop's own points
+    # rather than its x, so x is 0 to start with and moving it LEFT is what
+    # brings it back over the Garage.
+    workshop.x = -300                     # now half on top of the Garage
+    section.inspector.show_selection(workshop)
+    settle()
+    check("but a room moved on top of another one is",
+          panel_says("sitting on top"))
+    check("and the warning names which one",
+          any("Garage" in found.text() and "sitting on top" in found.text()
+              for found in section.inspector.findChildren(QLabel)))
+
+    workshop.x = 0                        # and back to where it was
+    section.inspector.show_selection(workshop)
+    settle()
+    check("moving it off again clears the warning",
+          not panel_says("sitting on top"))
+
+    # The rule itself, on the arrangements two rooms can actually be in.
+    def placed(name, points, x=0, y=0):
+        made = M.Room(id=name, name=name, points=[list(p) for p in points])
+        made.x = x
+        made.y = y
+        return made
+
+    square = M.rectangle_points(100, 100)
+    for label_, first, second, expected in [
+        ("half on top", placed("a", square), placed("b", square, 50), True),
+        ("well apart", placed("a", square), placed("b", square, 200), False),
+        ("one inside the other", placed("a", square),
+         placed("b", M.rectangle_points(20, 20), 10, 10), True),
+        ("sharing a wall", placed("a", square), placed("b", square, 100), False),
+        ("touching at one corner", placed("a", square),
+         placed("b", square, 100, 100), False),
+        ("exactly on top", placed("a", square), placed("b", square), True),
+        ("a square in an L's notch", placed("a", M.l_shape_points(200, 200)),
+         placed("b", M.rectangle_points(60, 60), 130, 10), False),
+    ]:
+        check(f"overlap, {label_}",
+              M.rooms_overlap(first, second) is expected
+              and M.rooms_overlap(second, first) is expected,
+              f"{M.rooms_overlap(first, second)} one way, "
+              f"{M.rooms_overlap(second, first)} the other")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} of {len(PASSED) + len(FAILED)} FAILED")

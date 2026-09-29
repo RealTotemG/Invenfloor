@@ -29,6 +29,7 @@ import * as T from "./theme.js";
 import {
   el, put, clear, button, swatch, field, numberField, choose, colors, icon,
 } from "./ui.js";
+import { tagChip, tagFilterRow, tagManager, tagRow } from "./tags.js";
 
 /** Something with a caption over it. */
 function labelled(caption, control) {
@@ -258,6 +259,19 @@ export function itemsScreen(screen, profile, state, { changed, again }) {
   }
   put(inner, tabs);
 
+  // -- tags ---------------------------------------------------------------
+  // Under the saved views rather than beside them, because they narrow the
+  // same list and a tag is a second question about it rather than a rival
+  // one: "things I have not filed" AND "tagged Tools" is a sensible thing to
+  // ask, and two rows of buttons that fight over one list is not.
+  const tagBar = put(el("div", "row"), tagFilterRow(profile, state, { changed, again }));
+  put(tagBar, el("span", "grow"));
+  put(tagBar, button(state.editingTags ? "Done" : "Edit tags", "quiet small",
+    () => { state.editingTags = !state.editingTags; again(); },
+    "Make tags, rename them, or take one away"));
+  put(inner, tagBar);
+  if (state.editingTags) put(inner, tagManager(profile, { changed, again }));
+
   // -- the list -----------------------------------------------------------
   const wanted = state.search.trim().toLowerCase();
   const misfiledIds = new Set(profile.misfiledItems().map(([item]) => item.id));
@@ -265,6 +279,7 @@ export function itemsScreen(screen, profile, state, { changed, again }) {
   if (state.filter === "unfiled") showing = profile.unfiledItems();
   if (state.filter === "low") showing = profile.lowItems();
   if (state.filter === "misfiled") showing = showing.filter(i => misfiledIds.has(i.id));
+  if (state.tagId) showing = showing.filter(i => i.tagIds.includes(state.tagId));
   if (wanted) {
     showing = showing.filter(item =>
       item.name.toLowerCase().includes(wanted)
@@ -301,6 +316,15 @@ export function itemsScreen(screen, profile, state, { changed, again }) {
         el("div", "small faint truncate", profile.locationOf(item))),
       el("span", "qty", String(item.totalQuantity())));
     if (item.isLow()) put(head, el("span", "small warn", "low"));
+    // Two at most on the row itself. The point here is recognizing a thing
+    // at a glance while scrolling, and a row carrying six chips is wider
+    // than the name it belongs to.
+    for (const tag of profile.tagsFor(item.tagIds).slice(0, 2)) {
+      put(head, tagChip(tag));
+    }
+    if (item.tagIds.length > 2) {
+      put(head, el("span", "note small", `+${item.tagIds.length - 2}`));
+    }
     put(row, head);
 
     if (open) put(row, itemDetail(profile, item, { changed, again }));
@@ -342,6 +366,10 @@ function itemDetail(profile, item, { changed, again }) {
       changed();
       again();
     }, { min: 0 }));
+
+  // -- tags ---------------------------------------------------------------
+  put(box, el("h4", null, "Tags"));
+  put(box, tagRow(profile, item, { changed, again }));
 
   // -- where it is --------------------------------------------------------
   const places = profile.locationsOf(item);
