@@ -44,6 +44,12 @@ import * as T from "./theme.js";
 // phone nudges whatever it landed on.
 const DRAG_SLOP = 3;
 
+/** The nearest grid line. A room is drawn on a grid and a shelf that lands
+ *  between two lines is a shelf whose size reads as 145.9320850139. */
+function snap(value) {
+  return Math.round(value / T.GRID_SIZE) * T.GRID_SIZE;
+}
+
 export class RoomView {
   /**
    * @param canvas   the <canvas> to draw in
@@ -53,16 +59,27 @@ export class RoomView {
    */
   constructor(canvas, {
     onChanged = () => {}, onSelected = () => {}, onEscape = () => {},
+    onAdded = () => {}, onModeChanged = () => {},
   } = {}) {
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
     this.onChanged = onChanged;
     this.onSelected = onSelected;
     this.onEscape = onEscape;
+    this.onAdded = onAdded;
+    this.onModeChanged = onModeChanged;
 
     this.profile = null;
     this.room = null;
     this.selectedId = null;
+
+    // The Add container tool, and the rectangle being dragged out with it.
+    // Adding from in here rather than only on the flat plan is the whole
+    // point of having a 3D view at all: you can see how much wall is free
+    // and how tall the thing beside it is, which a flat outline cannot show
+    // you. Deciding where a shelf goes is exactly the job this view is for.
+    this.adding = false;
+    this.addRect = null;
 
     this.scale = 1;
     this.originX = 0;
@@ -107,6 +124,12 @@ export class RoomView {
     if (event.target instanceof HTMLTextAreaElement) return;
     if (event.key !== "Escape") return;
 
+    // The tool is a rung of its own, above letting go of a selection: Escape
+    // out of a half-drawn shelf should put the tool away, not leave the room.
+    if (this.adding) {
+      this.setAdding(false);
+      return;
+    }
     if (this.selectedId) {
       this.select(null);
       return;
@@ -119,7 +142,17 @@ export class RoomView {
     this.profile = profile;
     this.room = room;
     this.selectedId = null;
+    this.addRect = null;
     this.resize();
+  }
+
+  /** Arm or disarm the Add container tool. */
+  setAdding(armed) {
+    this.adding = Boolean(armed);
+    this.addRect = null;
+    if (this.adding) this.select(null);
+    this.draw();
+    this.onModeChanged();
   }
 
   get selected() {
@@ -233,6 +266,26 @@ export class RoomView {
 
     const chosen = this.selected;
     if (chosen) this.drawLabel(chosen);
+
+    if (this.addRect) this.drawAddPreview();
+  }
+
+  /** The footprint being dragged out, and whether it will fit.
+   *
+   *  Drawn on the floor rather than as a box, because a footprint is what is
+   *  being chosen: how tall the thing is comes afterwards, from the panel,
+   *  and drawing a full box now would promise a height nobody has picked.
+   */
+  drawAddPreview() {
+    const { x, y, w, h } = this.addRect;
+    const wide = Math.max(w, M.MIN_CONTAINER_SIZE);
+    const deep = Math.max(h, M.MIN_CONTAINER_SIZE);
+    const fits = M.roomContainsRect(this.room, x, y, wide, deep);
+    const color = fits ? T.ACCENT : T.DANGER;
+
+    this.fill(iso.polygon([[x, y, 0], [x + wide, y, 0],
+                           [x + wide, y + deep, 0], [x, y + deep, 0]]),
+              iso.mix(color, T.CANVAS_BG, 0.55), color, 1.8);
   }
 
   /** One polygon, in room coordinates. Line widths are divided by the scale
@@ -476,6 +529,16 @@ export class RoomView {
 
   pressed(event) {
     if (!this.room || this.room.locked) return;
+
+    if (this.adding) {
+      const [fx, fy] = this.floorUnder(event);
+      this.canvas.setPointerCapture(event.pointerId);
+      this.addRect = { pointer: event.pointerId, fromX: fx, fromY: fy,
+                       x: fx, y: fy, w: 0, h: 0 };
+      event.preventDefault();
+      return;
+    }
+
     const container = this.containerAt(event);
     this.select(container?.id ?? null);
     if (!container) return;
@@ -492,6 +555,24 @@ export class RoomView {
   }
 
   moved(event) {
+    if (this.addRect && event.pointerId === this.addRect.pointer) {
+      // Snapped to the grid, the same as the flat plan does it. Unsnapped,
+      // the corner of an isometric drag lands on a fraction of a unit and
+      // the panel then shows a shelf 145.9320850139 wide, which is not a
+      // measurement anybody asked for and not one they can act on.
+      const [fx, fy] = this.floorUnder(event);
+      const fromX = snap(this.addRect.fromX);
+      const fromY = snap(this.addRect.fromY);
+      const toX = snap(fx);
+      const toY = snap(fy);
+      this.addRect.x = Math.min(fromX, toX);
+      this.addRect.y = Math.min(fromY, toY);
+      this.addRect.w = Math.abs(toX - fromX);
+      this.addRect.h = Math.abs(toY - fromY);
+      this.draw();
+      return;
+    }
+
     if (!this.drag || event.pointerId !== this.drag.pointer) return;
 
     if (!this.drag.moved) {
@@ -524,6 +605,38 @@ export class RoomView {
   }
 
   released(event) {
+    if (this.addRect && event.pointerId === this.addRect.pointer) {
+      const { x, y, w, h } = this.addRect;
+      this.addRect = null;
+      if (this.canvas.hasPointerCapture(event.pointerId)) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
+
+      // Deliberately the same arithmetic as the flat plan's finishBox, down
+      // to the constant: a tap means the same thing in both views, and a
+      // rectangle slightly over a wall is nudged somewhere legal rather than
+      // refused, because dragging one out is a statement of intent and
+      // clipping a wall is a slip.
+      let [left, top] = [x, y];
+      let wide = Math.max(w, M.MIN_CONTAINER_SIZE);
+      let deep = Math.max(h, M.MIN_CONTAINER_SIZE);
+      [left, top, wide, deep] = M.nearestFit(this.room, left, top, wide, deep);
+      this.setAdding(false);
+      if (!M.roomContainsRect(this.room, left, top, wide, deep)) return;
+
+      const made = new M.Container({
+        name: `Container ${this.room.containers.length + 1}`,
+        x: left, y: top, w: wide, h: deep,
+        color: T.SWATCHES[(this.room.containers.length + 2) % T.SWATCHES.length],
+      });
+      this.room.containers.push(made);
+      this.select(made.id);
+      this.onChanged();
+      this.onAdded(made);
+      this.draw();
+      return;
+    }
+
     if (!this.drag || event.pointerId !== this.drag.pointer) return;
     const shifted = this.drag.moved;
     this.drag = null;

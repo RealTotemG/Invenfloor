@@ -37,6 +37,34 @@ import * as T from "./theme.js";
 import { el, put, clear, button, field, colors, choose, icon } from "./ui.js";
 
 
+/** Make a tag and add it to the profile. Returns it, or null if nobody typed.
+ *
+ *  `prompt` rather than a form, and the reason is the same one that keeps the
+ *  rest of this file inline: a name is one word, and putting up a dialog to
+ *  collect one word means building a dialog layer this app does not have. The
+ *  tag manager on the Items screen is where a tag gets its color and a
+ *  considered name; this is for the moment somebody has a room selected and a
+ *  word in mind.
+ */
+export function makeTag(profile, suggested = "") {
+  const typed = prompt("Name for the new tag", suggested);
+  if (typed === null) return null;
+  const name = M.cleanName(typed, "");
+  if (!name) return null;
+
+  const already = profile.tags.find(
+    tag => tag.name.toLowerCase() === name.toLowerCase());
+  if (already) return already;
+
+  const made = new M.Tag({
+    name,
+    color: T.SWATCHES[profile.tags.length % T.SWATCHES.length],
+  });
+  profile.tags.push(made);
+  return made;
+}
+
+
 /** A tag as a pill, in the tag's own color.
  *
  *  Read-only. It is how a tag looks anywhere one is shown, so that a tag is
@@ -68,7 +96,7 @@ export function tagChip(tag, { onRemove = null } = {}) {
  *  function rather than three because the job is identical and the day they
  *  differ is the day one of them quietly stops working.
  */
-export function tagRow(profile, thing, { changed, again }) {
+export function tagRow(profile, thing, { changed, again, onNewTag = null }) {
   const box = el("div", "tag-row");
 
   for (const tag of profile.tagsFor(thing.tagIds)) {
@@ -83,12 +111,25 @@ export function tagRow(profile, thing, { changed, again }) {
   }
 
   const spare = profile.tags.filter(tag => !thing.tagIds.includes(tag.id));
+
+  // With no tags at all this used to read "No tags yet. Make one below." and
+  // in the side panel there is no below: the sentence pointed at the tag
+  // manager on the Items screen, which is not on the screen you are looking
+  // at. A line telling you to use something that is not there is worse than
+  // no line, so the caller can hand over a way to make one on the spot.
   if (!profile.tags.length) {
-    put(box, el("span", "note small", "No tags yet. Make one below."));
+    if (!onNewTag) {
+      put(box, el("span", "note small",
+                  "No tags yet. Edit tags on the Items screen makes them."));
+      return box;
+    }
+    put(box, el("span", "note small", "No tags yet."));
+    put(box, newTagButton(profile, thing, { changed, again, onNewTag }));
     return box;
   }
   if (!spare.length) {
     put(box, el("span", "note small", "Every tag is on this already."));
+    if (onNewTag) put(box, newTagButton(profile, thing, { changed, again, onNewTag }));
     return box;
   }
 
@@ -107,7 +148,25 @@ export function tagRow(profile, thing, { changed, again }) {
     });
   picker.classList.add("tag-pick");
   put(box, picker);
+  if (onNewTag) put(box, newTagButton(profile, thing, { changed, again, onNewTag }));
   return box;
+}
+
+/** Make a tag and put it straight on this thing.
+ *
+ *  Two steps in one press, and on purpose. Somebody reaching for this has a
+ *  room selected and a word in mind; making the tag and then having to find
+ *  the thing again to put it on is the same job twice.
+ */
+function newTagButton(profile, thing, { changed, again, onNewTag }) {
+  return button("+ New tag", "quiet small", () => {
+    const made = onNewTag();
+    if (!made) return;
+    thing.tagIds = [...thing.tagIds, made.id];
+    if (thing.touch) thing.touch();
+    changed();
+    again();
+  }, "Make a tag and put it on this");
 }
 
 

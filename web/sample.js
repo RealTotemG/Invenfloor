@@ -60,6 +60,19 @@ export function sample() {
                       x: 15, y: 15, w: 140, h: 40, height: 75, tierCount: 3 }),
   ];
 
+  // Tags, on items AND on rooms, because one without the other is half the
+  // idea. Tools belongs in the Garage and Food belongs in the Kitchen, which
+  // is what lets "In the wrong room" find the motor oil somebody left on the
+  // pantry shelf. Without a tagged room there is nothing to be wrong about,
+  // and the view sits there forever saying nothing.
+  const tools = new M.Tag({ name: "Tools", color: "#f0a726" });
+  const food = new M.Tag({ name: "Food", color: "#84cc16" });
+  const fragile = new M.Tag({ name: "Fragile", color: "#f2555a" });
+  profile.tags = [tools, food, fragile];
+
+  garage.tagIds = [tools.id];
+  kitchen.tagIds = [food.id];
+
   ground.rooms = [garage, kitchen];
   upstairs.rooms = [closet];
   profile.floors = [ground, upstairs];
@@ -72,19 +85,24 @@ export function sample() {
     // Deliberately spread across the tiers of the racking, including one
     // thing on two of them at once, because that is the case the contents
     // panel and the shelf marks both have to get right.
-    item("Socket set", "#4f7cff", [[shelving.id, 1, 2]]),
-    item("Motor oil", "#f0a726", [[shelving.id, 4, 1]]),
-    item("Extension cords", "#33d6a0", [[shelving.id, 3, 3], [bench.id, 1, 0]]),
+    item("Socket set", "#4f7cff", [[shelving.id, 1, 2]], 0, [tools.id]),
+    item("Motor oil", "#f0a726", [[shelving.id, 4, 1]], 0, [tools.id]),
+    item("Extension cords", "#33d6a0", [[shelving.id, 3, 3], [bench.id, 1, 0]],
+         0, [tools.id]),
     item("Zip ties", "#a78bfa", [[shelving.id, 2, 1], [shelving.id, 6, 4]]),
     item("Rags", "#94a3b8", [[shelving.id, 5, 0]]),
-    item("Wood screws", "#94a3b8", [[bench.id, 6, 0]]),
+    item("Wood screws", "#94a3b8", [[bench.id, 6, 0]], 0, [tools.id]),
     item("Exterior white", "#f2555a", [[paint.id, 2, 1]]),
     item("Paint rollers", "#a78bfa", [[paint.id, 5, 2]]),
-    item("Tinned tomatoes", "#84cc16", [[pantry.id, 12, 2]]),
-    item("Pasta", "#facc15", [[pantry.id, 8, 3]]),
-    item("Olive oil", "#fb923c", [[pantry.id, 2, 1]]),
+    item("Tinned tomatoes", "#84cc16", [[pantry.id, 12, 2]], 0, [food.id]),
+    item("Pasta", "#facc15", [[pantry.id, 8, 3]], 0, [food.id]),
+    item("Olive oil", "#fb923c", [[pantry.id, 2, 1]], 0, [food.id, fragile.id]),
+    // Tagged Tools and sitting in the Kitchen, which is tagged Food. The one
+    // thing in here that is genuinely in the wrong room, so the view that
+    // finds those has something to find.
+    item("Torch", "#facc15", [[pantry.id, 1, 0]], 0, [tools.id]),
     // Below its par level, so the "running low" filter has something in it.
-    item("Coffee", "#e879f9", [[pantry.id, 1, 4]], 6),
+    item("Coffee", "#e879f9", [[pantry.id, 1, 4]], 6, [food.id]),
     item("Spare bulbs", "#fb923c", [[top.id, 6, 1]]),
     // One with nowhere to live, so the "not in any container" line has
     // something to count and does not go untested.
@@ -97,9 +115,9 @@ export function sample() {
   return M.Profile.fromDict(profile.toDict());
 }
 
-function item(name, color, placements, minQuantity = 0) {
+function item(name, color, placements, minQuantity = 0, tagIds = []) {
   return new M.Item({
-    name, color, minQuantity,
+    name, color, minQuantity, tagIds,
     placements: placements.map(
       ([containerId, quantity, tier]) => new M.Placement(containerId, quantity, tier)),
   });

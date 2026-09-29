@@ -46,7 +46,7 @@ import {
   icon, toolButton,
 } from "./ui.js";
 import { footer, watchForErrors } from "./about.js";
-import { tagRow } from "./tags.js";
+import { makeTag, tagRow } from "./tags.js";
 
 T.apply();
 
@@ -101,7 +101,9 @@ let saveTimer = null;
 let saveTrouble = "";
 let corners = 0;           // corners placed so far in a half-drawn room
 const itemsState = { search: "", filter: "all", chosenId: null,
-                     tagId: null, editingTags: false };
+                     tagId: null, editingTags: false,
+                     adding: false, queue: [], addTo: "", addTier: 0,
+                     picked: [] };
 
 // Is the open profile one of the saved ones? False for the made-up house and
 // for a file opened when there is nowhere to put it. Changes to those are
@@ -385,6 +387,11 @@ function openProfile(found, isKept = true) {
   itemsState.filter = "all";
   itemsState.tagId = null;
   itemsState.editingTags = false;
+  itemsState.adding = false;
+  itemsState.queue = [];
+  itemsState.addTo = "";
+  itemsState.addTier = 0;
+  itemsState.picked = [];
   itemsState.chosenId = null;
   showWorkspace();
 }
@@ -428,6 +435,8 @@ function showWorkspace() {
       onChanged: () => touched(),
       onSelected: () => drawPanel(),
       onEscape: () => seeItFlat(),
+      onModeChanged: () => drawStrips(),
+      onAdded: () => { drawStrips(); drawPanel(); },
     });
     view.show(profile, room);
   } else {
@@ -675,24 +684,23 @@ function drawStrips() {
     put(bar, toolButton("three",
       `${inThree ? "3D" : "In"}: ${M.short(room.name, 14)}`, {
         on: where !== "items",
-        tooltip: where === "items" ? `Back to ${room.name}`
-          : inThree ? "The room you are looking at"
-          : `See ${room.name} in 3D`,
+        tooltip: where === "items"
+          ? `Back to ${room.name}`
+          : "The room you are working inside",
+        // Says where you are; it does not change how the room is drawn.
+        //
+        // It used to jump you into 3D when pressed from the flat view, on
+        // the reasoning that it was the only way back in after Escape. That
+        // was the wrong button to hang it on: a chip that reads "In: Garage"
+        // is telling you where you are standing, and a label that moves you
+        // somewhere when you press it is a label that lies. Switching how the
+        // room is drawn is what the 3D button does, so that is where it went.
         onClick: () => {
-          if (inThree) return;              // already looking at it
-
-          if (where === "items") {
-            // Back the way you left it. 3D unless you had asked for this one
-            // flat, in which case flat is what you asked for.
-            where = (profile.view3d && flatFor !== room.id) ? "room" : "plan";
-            showWorkspace();
-            return;
-          }
-
-          // Standing in it on the flat plan. This is the way back into 3D
-          // after Escape, and the only way that does not mean stepping out of
-          // the room and walking back in.
-          seeItInThree(room);
+          if (where !== "items") return;    // it is a label, not a door
+          // Back the way you left it. 3D unless you had asked for this one
+          // flat, in which case flat is what you asked for.
+          where = (profile.view3d && flatFor !== room.id) ? "room" : "plan";
+          showWorkspace();
         },
       }));
   }
@@ -710,6 +718,15 @@ function drawStrips() {
   put(bar, el("span", "sep"), floorPicker());
 
   if (where === "room") {
+    // Adding a container from in here, not only on the flat plan. This is
+    // the view where you can see how much wall is free and how tall the
+    // thing next to it stands, which is the decision being made when you
+    // put a shelf somewhere.
+    put(bar, el("span", "sep"), toolButton("box", "Add container", {
+      on: view.adding,
+      tooltip: "Drag out a rectangle on the floor of this room",
+      onClick: () => view.setAdding(!view.adding),
+    }));
     put(bar, el("span", "grow"), threeDToggle());
     put(bar, button("See it flat", "quiet small", () => seeItFlat(),
                     "The flat plan of this room, without leaving it. "
@@ -719,10 +736,19 @@ function drawStrips() {
                             showWorkspace(); },
                     "Back to the whole floor"));
     put(strips, bar);
-    put(strips, hintStrip(
-      "Drag a container to move it. It slides along a wall rather than "
-      + "leaving the room. Press one to see what is inside. Escape gives you "
-      + "the flat plan of this room, and again steps out of it."));
+
+    if (view.adding) {
+      put(strips, hintStrip(
+        "Drag a rectangle out on the floor to make a container there. It "
+        + "turns red where it will not fit.",
+        button("Cancel", "quiet small danger", () => view.setAdding(false),
+               "Put the tool away")));
+    } else {
+      put(strips, hintStrip(
+        "Drag a container to move it. It slides along a wall rather than "
+        + "leaving the room. Press one to see what is inside. Escape gives "
+        + "you the flat plan of this room, and again steps out of it."));
+    }
     return;
   }
 
@@ -794,6 +820,18 @@ function threeDToggle() {
       ? "Rooms open in 3D when you step into one. Press to keep them flat."
       : "Rooms stay flat. Press to have them open in 3D when you step in.",
     onClick: () => {
+      // Pressed while a room is showing flat because of Escape, with the
+      // setting still on. That press means "give me 3D back": the setting is
+      // already on, so turning it off would only agree with what is already
+      // on the screen. It is also now the only way back into 3D for a room
+      // you are standing in, which is what makes it the right button.
+      if (room && profile.view3d && flatFor === room.id) {
+        flatFor = null;
+        where = "room";
+        showWorkspace();
+        return;
+      }
+
       profile.view3d = !profile.view3d;
       touched();
 
@@ -1136,6 +1174,7 @@ function roomPanel(panel, chosen) {
   put(panel, tagRow(profile, chosen, {
     changed: () => { touched(); view.draw(); },
     again: () => drawPanel(),
+    onNewTag: () => makeTag(profile),
   }));
 
   // Step inside goes through the view rather than setting anything here, so
@@ -1229,6 +1268,7 @@ function containerPanel(panel, chosen) {
   put(panel, tagRow(profile, chosen, {
     changed: () => { touched(); view.draw(); },
     again: () => drawPanel(),
+    onNewTag: () => makeTag(profile),
   }));
 
   contentsPanel(panel, profile, chosen, {

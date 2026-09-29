@@ -556,3 +556,44 @@ input.qty-box {
   font-size: var(--size-sm);
   flex: none;
 }
+
+/* A name waiting to go into the catalog. Not a tag: it is the same pill shape
+   because it is the same idea, a short thing in a wrapping row with a way to
+   take it off, but it has no color of its own yet because it is not anything
+   yet. */
+.tag.queued {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: var(--bg-input);
+}
+
+/* The tick box on a row, and the bar that appears once anything is ticked. */
+.rows .listing { position: relative; }
+.listing input.pick-one {
+  position: absolute;
+  left: var(--space-sm);
+  top: 14px;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--accent);
+  z-index: 1;
+}
+/* Room for the box, so it is not sitting on top of the swatch. */
+.listing .listing-head { padding-left: 34px; }
+
+.card.picked { border-color: var(--accent); }
+
+/* A cross that is not inside a chip: takes a tag off everything chosen. */
+.tag-x.standalone {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: 0 var(--space-xs) 0 -2px;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .75;
+}
+.tag-x.standalone:hover { opacity: 1; }
