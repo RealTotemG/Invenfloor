@@ -207,6 +207,30 @@ h2:first-child { margin-top: 0; }
 .chips button { white-space: nowrap; }
 .chips button.on { background: var(--accent-soft); border-color: var(--accent); }
 
+/* The one toolbar. Everything that used to be four rows sits on this, so the
+   groups need something between them or it reads as one long run of buttons
+   with no idea which of them belong together. */
+.toolbar { align-items: center; }
+.toolbar .sep {
+  flex: none;
+  width: 1px;
+  align-self: stretch;
+  margin: 0 var(--space-xs);
+  background: var(--border);
+}
+
+/* Not class "row": the rule further up gives a select inside a .row
+   `flex: 1 1 0; width: 0` so it fills a panel, and a select told to be zero
+   wide on a toolbar vanishes entirely. */
+.pick { display: flex; gap: var(--space-xs); align-items: center; flex: none; }
+.pick select.floor-pick {
+  width: auto;
+  min-width: 8em;
+  max-width: 14em;
+  padding: 6px 8px;
+  flex: none;
+}
+
 .split { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 
 .stage {

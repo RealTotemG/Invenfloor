@@ -68,8 +68,32 @@ const when = milliseconds =>
 let store = null;
 let profile = null;        // the open profile, or null while in the launcher
 let floor = null;
-let room = null;           // the room the 3D view is showing
-let where = "plan";        // "plan" | "room" | "items"
+
+// The room you are INSIDE, however it is being drawn.
+//
+// It used to mean "the room the 3D view is showing", which made being inside
+// a room two unrelated states: one for 3D, and the flat view's own `focused`
+// for everything else. Stepping into a room and looking at a room in 3D were
+// different things that happened to look similar, so Escape out of 3D could
+// only ever take you all the way back to the floor.
+//
+// One idea instead: you are inside this room, and `where` says how it is
+// drawn. That is the same shape the desktop app has, and it is what makes
+// Escape able to drop from 3D to flat without letting go of the room.
+let room = null;
+let where = "plan";        // "plan" | "room" | "items"; "room" means 3D
+
+// The room somebody pressed Escape in, so that the flat view does not hand it
+// straight back to 3D. Cleared when they step out, so walking back in gives
+// them 3D again: it is a "not this time", not a setting.
+let flatFor = null;
+
+// True only while showWorkspace is putting the view back the way it was.
+// stepInto() fires onFocused, and onFocused is where "stepping into a room
+// opens it in 3D" lives, so without this a rebuild of the flat view would
+// bounce straight into 3D and take the room away from you.
+let restoring = false;
+
 let view = null;           // whichever canvas is up, if any
 let history = null;
 let saveTimer = null;
@@ -399,6 +423,7 @@ function showWorkspace() {
     view = new RoomView(canvas, {
       onChanged: () => touched(),
       onSelected: () => drawPanel(),
+      onEscape: () => seeItFlat(),
     });
     view.show(profile, room);
   } else {
@@ -408,16 +433,83 @@ function showWorkspace() {
       // that says what dragging a room does is only there while a room is
       // selected, so it has to appear and disappear with one.
       onSelected: () => { drawStrips(); drawPanel(); },
-      onFocused: () => { drawStrips(); drawPanel(); },
+      onFocused: focused => steppedInto(focused),
       onModeChanged: () => drawStrips(),
       onDrawingChanged: placed => { corners = placed; drawStrips(); },
     });
     view.show(profile, floor);
+
+    // Put us back inside whichever room we were in. show() clears the focus,
+    // so without this, anything that rebuilds the workspace while you are
+    // standing in a room quietly puts you back out on the floor.
+    if (room) {
+      restoring = true;
+      view.stepInto(room);
+      restoring = false;
+    }
   }
 
   refreshBar();
   drawStrips();
   drawPanel();
+}
+
+/** Somebody stepped into a room, or out of one, on the flat plan.
+ *
+ *  This is where "stepping into a room opens it in 3D" lives, and it is here
+ *  rather than on the double-click because there is more than one way in: the
+ *  canvas, the Step inside button, and undo putting you back where you were.
+ *  One place means they cannot disagree.
+ */
+function steppedInto(focused) {
+  if (restoring) { drawStrips(); drawPanel(); return; }
+
+  room = focused;
+
+  if (!focused) {
+    // Out on the floor again, so the "show me this one flat" note expires.
+    // Walking back into the same room should give you 3D, the same as any
+    // other room would.
+    flatFor = null;
+    drawStrips();
+    drawPanel();
+    return;
+  }
+
+  if (profile.view3d && flatFor !== focused.id) {
+    where = "room";
+    showWorkspace();
+    return;
+  }
+
+  drawStrips();
+  drawPanel();
+}
+
+/** Escape out of 3D: the flat plan of the room you are standing in.
+ *
+ *  Not all the way out to the floor. Leaving the room is the next rung down,
+ *  and the flat view already has it, so pressing Escape twice walks you out
+ *  the way it always did.
+ */
+function seeItFlat() {
+  if (!room) return;
+  flatFor = room.id;
+  where = "plan";
+  showWorkspace();
+}
+
+/** Open the room you are inside in 3D, whatever was said before.
+ *
+ *  Clears the Escape note, because asking for 3D is a clearer statement than
+ *  a note saying you did not want it a minute ago.
+ */
+function seeItInThree(chosen = room) {
+  if (!chosen) return;
+  room = chosen;
+  flatFor = null;
+  where = "room";
+  showWorkspace();
 }
 
 function refreshBar() {
@@ -535,46 +627,208 @@ function drawStrips() {
         : "Not saved, and there is nowhere to save it. Download it to keep it.")));
   }
 
-  // Which of the three places you are in. Always first, always the same two
-  // buttons, so there is one fixed thing on the screen to navigate by.
-  const places = el("div", "chips places");
-  put(places, toolButton("plan", "Floor plan", {
+  // ONE BAR, WHERE THERE USED TO BE FIVE
+  // ------------------------------------
+  // Where you are, which floor, and the tools each had a row, with a row of
+  // room shapes under those and a row of drag modes under that. Measured on a
+  // 900 pixel window it came to 356 pixels of toolbar before any floor plan
+  // appeared: forty per cent of the screen spent telling you what you could
+  // do, and the rest of it for actually doing it.
+  //
+  // Three things fixed that. The floors became a dropdown, which they wanted
+  // to be anyway the moment there could be six of them. The shapes only
+  // appear while a room is being drawn, because that is the only time they do
+  // anything. What dragging a room does moved onto the end of the hint line,
+  // which is already the line talking about the room you have selected.
+  //
+  // The tools themselves stayed as buttons with their names showing. They are
+  // the part somebody has to find without being told, and a dropdown you have
+  // to open before you can see what is in it is how that gets lost.
+  const bar = el("div", "chips toolbar");
+
+  put(bar, toolButton("plan", "Floor plan", {
     on: where === "plan",
-    tooltip: "Draw rooms and arrange what is in them",
-    onClick: () => { where = "plan"; showWorkspace(); },
+    // Pressing this from 3D keeps you inside the room, flat, the same as
+    // Escape. Being inside a room IS the floor plan, with the rest of it
+    // dimmed, so throwing you out to the whole floor as well would be doing
+    // two things when you asked for one. Step out is the button for that.
+    tooltip: where === "room" && room
+      ? `The flat plan, still inside ${room.name}`
+      : "Draw rooms and arrange what is in them",
+    onClick: () => {
+      if (where === "room" && room) { seeItFlat(); return; }
+      where = "plan";
+      showWorkspace();
+    },
   }));
-  // The 3D view is a place you can be, so it gets a chip of its own rather
-  // than a separate back button somewhere else on the screen. Two buttons
-  // both saying "Floor plan", one of them highlighted, is how you make
-  // somebody wonder which one they are supposed to press.
-  if (where === "room" && room) {
-    put(places, toolButton("three", `3D: ${M.short(room.name, 14)}`, {
-      on: true,
-      tooltip: "Looking inside this room",
-      onClick: () => {},
-    }));
+  // The room you are inside gets a chip, and it stays there on the Items
+  // screen. That is the whole point of it: go and look something up in the
+  // catalog and the way back to the room you were standing in is still on
+  // screen, rather than being a hunt back through the floor plan for a room
+  // whose name you might not remember.
+  if (room) {
+    const inThree = where === "room";
+    put(bar, toolButton("three",
+      `${inThree ? "3D" : "In"}: ${M.short(room.name, 14)}`, {
+        on: where !== "items",
+        tooltip: where === "items" ? `Back to ${room.name}`
+          : inThree ? "The room you are looking at"
+          : `See ${room.name} in 3D`,
+        onClick: () => {
+          if (inThree) return;              // already looking at it
+
+          if (where === "items") {
+            // Back the way you left it. 3D unless you had asked for this one
+            // flat, in which case flat is what you asked for.
+            where = (profile.view3d && flatFor !== room.id) ? "room" : "plan";
+            showWorkspace();
+            return;
+          }
+
+          // Standing in it on the flat plan. This is the way back into 3D
+          // after Escape, and the only way that does not mean stepping out of
+          // the room and walking back in.
+          seeItInThree(room);
+        },
+      }));
   }
-  put(places, toolButton("items", "Items", {
+  put(bar, toolButton("items", "Items", {
     on: where === "items",
     tooltip: "Everything in the catalog, and where it lives",
     onClick: () => { where = "items"; showWorkspace(); },
   }));
-  put(strips, places);
 
-  if (where === "items") return;
-
-  const floors = el("div", "chips");
-  put(floors, el("span", "strip-label", "Floors"));
-  for (const each of profile.floors) {
-    put(floors, button(M.short(each.name, 20),
-      `small${each === floor ? " on" : ""}`, () => {
-        floor = each;
-        room = null;
-        where = "plan";
-        showWorkspace();
-      }, `Show ${each.name}`));
+  if (where === "items") {
+    put(strips, bar);
+    return;
   }
-  put(floors, button("+ Floor", "quiet small", () => {
+
+  put(bar, el("span", "sep"), floorPicker());
+
+  if (where === "room") {
+    put(bar, el("span", "grow"), threeDToggle());
+    put(bar, button("See it flat", "quiet small", () => seeItFlat(),
+                    "The flat plan of this room, without leaving it. "
+                    + "Escape does the same."));
+    put(bar, button("Step out", "quiet small",
+                    () => { room = null; flatFor = null; where = "plan";
+                            showWorkspace(); },
+                    "Back to the whole floor"));
+    put(strips, bar);
+    put(strips, hintStrip(
+      "Drag a container to move it. It slides along a wall rather than "
+      + "leaving the room. Press one to see what is inside. Escape gives you "
+      + "the flat plan of this room, and again steps out of it."));
+    return;
+  }
+
+  put(bar, el("span", "sep"));
+  const tool = (name, label, mode, tip, preset = null) =>
+    toolButton(name, label, {
+      on: view.mode === mode && view.preset === preset,
+      tooltip: tip,
+      onClick: () => view.setMode(mode, preset),
+    });
+  put(bar,
+    tool("select", "Select", F.SELECT,
+         "Press a room to pick it. Press it twice to step inside."),
+    tool("draw", "Draw room", F.DRAW,
+         "Place the corners of a room one at a time, or pick a ready-made "
+         + "shape from the row that appears"),
+    tool("box", "Add container", F.BOX,
+         "Drag a rectangle inside a room to make a shelf, drawer or bin"));
+  put(bar, el("span", "grow"), threeDToggle());
+  put(bar, toolButton("fit", "Fit", {
+    tooltip: "Put everything on this floor back on the screen",
+    onClick: () => view.fit(),
+  }));
+  put(strips, bar);
+
+  // The shapes, and only while a room is being drawn.
+  //
+  // SHAPE counts as drawing every bit as much as DRAW does, and the test has
+  // to allow both. Pressing a preset is how you leave DRAW mode, so checking
+  // for DRAW alone would make the row vanish underneath the button somebody
+  // had just that moment pressed.
+  if (view.mode === F.DRAW || view.mode === F.SHAPE) {
+    const shapes = el("div", "chips");
+    put(shapes, el("span", "strip-label", "Or start from a shape"));
+    const shapeIcons = { Rectangle: "rectangle", Square: "square",
+                         Circle: "circle", Triangle: "triangle",
+                         "L-shape": "lshape" };
+    for (const [name] of M.ROOM_PRESETS) {
+      put(shapes, toolButton(shapeIcons[name] ?? "rectangle", name, {
+        on: view.mode === F.SHAPE && view.preset === name,
+        tooltip: `Drag out a ${name.toLowerCase()} room, or press once for a `
+                 + "default sized one",
+        onClick: () => view.setMode(F.SHAPE, name),
+      }));
+    }
+    put(strips, shapes);
+  }
+
+  put(strips, hintStrip(...hintFor()));
+}
+
+/** The 3D switch. A setting, not a trip.
+ *
+ *  It says what happens the NEXT time you step into a room, which is why it
+ *  can be pressed out on the floor overview where nothing visible changes.
+ *  The desktop app hit the same thing and answered it in the hint line; this
+ *  does it in the tooltip and by staying lit, and the line under the toolbar
+ *  mentions 3D while it is on so that pressing it out here is not a button
+ *  that appears to do nothing.
+ *
+ *  Kept on the profile rather than in this tab, so it survives a reload and
+ *  so two profiles can disagree. A warehouse of identical racking is easier
+ *  flat; a house is easier in 3D.
+ */
+function threeDToggle() {
+  return toolButton("three", "3D", {
+    on: profile.view3d,
+    tooltip: profile.view3d
+      ? "Rooms open in 3D when you step into one. Press to keep them flat."
+      : "Rooms stay flat. Press to have them open in 3D when you step in.",
+    onClick: () => {
+      profile.view3d = !profile.view3d;
+      touched();
+
+      // Standing in a room when the switch is thrown, so change what is on
+      // screen now rather than making them step out and back in to see it.
+      if (room) {
+        flatFor = null;
+        where = profile.view3d ? "room" : "plan";
+      }
+      showWorkspace();
+    },
+  });
+}
+
+/** Which floor you are looking at, and a button to add another.
+ *
+ *  A row of buttons was fine with one floor and would be silly with six. A
+ *  dropdown is the same width whatever is in it, which is the whole reason to
+ *  use one here.
+ *
+ *  The wrapper is not class "row", and that is deliberate rather than fussy:
+ *  the stylesheet gives a select inside a .row `flex: 1 1 0; width: 0` so that
+ *  it fills a panel, and a select told to be zero wide on a toolbar simply
+ *  disappears.
+ */
+function floorPicker() {
+  const picker = choose(null,
+    profile.floors.map(each => [each.id, M.short(each.name, 24)]),
+    floor?.id,
+    value => {
+      floor = profile.floors.find(each => each.id === value) ?? floor;
+      room = null;
+      where = "plan";
+      showWorkspace();
+    });
+  picker.className = "floor-pick";
+  picker.title = "Which level of the building";
+
+  const add = button("+", "quiet small", () => {
     const made = new M.Floor({
       name: `Floor ${profile.floors.length + 1}`,
       color: T.SWATCHES[profile.floors.length % T.SWATCHES.length],
@@ -584,83 +838,34 @@ function drawStrips() {
     room = null;
     touched();
     showWorkspace();
-  }, "Add another level to this building"));
-  put(strips, floors);
+  }, "Add another level to this building");
 
-  if (where === "room") {
-    put(strips, hintStrip(
-      "Drag a container to move it. It slides along a wall rather than "
-      + "leaving the room. Press one to see what is in it, and which shelf "
-      + "each thing is on.",
-      button("Back to the floor plan", "quiet small",
-             () => { where = "plan"; showWorkspace(); },
-             "Stop looking inside this room")));
-    return;
-  }
-
-  drawPlanTools(strips);
+  return put(el("div", "pick"), picker, add);
 }
 
-function drawPlanTools(strips) {
-  const tools = el("div", "chips");
-  put(tools, el("span", "strip-label", "Tool"));
-  const tool = (name, label, mode, tip, preset = null) =>
-    toolButton(name, label, {
-      on: view.mode === mode && view.preset === preset,
+/** Move, Resize and Reshape, for the room that is selected.
+ *
+ *  On the end of the hint line rather than in a row of its own. These only
+ *  mean anything while a room is selected, which is exactly when the hint
+ *  line is already describing that room, so the two belong on one line.
+ */
+function editModeButtons() {
+  const row = el("div", "row tight");
+  for (const [name, label, mode, tip] of [
+    ["step", "Move", F.MOVE, "Drag the room around the floor"],
+    ["fit", "Resize", F.RESIZE,
+     "Square handles round the outside. Dragging one stretches the whole "
+     + "room and keeps its shape."],
+    ["draw", "Reshape", F.VERTICES,
+     "A round handle on every corner. Drag one to move that corner."],
+  ]) {
+    put(row, toolButton(name, label, {
+      on: view.editMode === mode,
       tooltip: tip,
-      onClick: () => view.setMode(mode, preset),
-    });
-
-  put(tools,
-    tool("select", "Select", F.SELECT,
-         "Press a room to pick it. Press it twice to step inside."),
-    tool("draw", "Draw room", F.DRAW,
-         "Place the corners of a room one at a time"),
-    tool("box", "Add container", F.BOX,
-         "Drag a rectangle inside a room to make a shelf, drawer or bin"));
-  put(tools, el("span", "grow"));
-  const fit = toolButton("fit", "Fit", {
-    tooltip: "Put everything on this floor back on the screen",
-    onClick: () => view.fit(),
-  });
-  put(tools, fit);
-  put(strips, tools);
-
-  const shapes = el("div", "chips");
-  put(shapes, el("span", "strip-label", "Or start from a shape"));
-  const shapeIcons = { Rectangle: "rectangle", Square: "square", Circle: "circle",
-                       Triangle: "triangle", "L-shape": "lshape" };
-  for (const [name] of M.ROOM_PRESETS) {
-    put(shapes, toolButton(shapeIcons[name] ?? "rectangle", name, {
-      on: view.mode === F.SHAPE && view.preset === name,
-      tooltip: `Drag out a ${name.toLowerCase()} room, or press once for a `
-               + "default sized one",
-      onClick: () => view.setMode(F.SHAPE, name),
+      onClick: () => { view.setEditMode(mode); drawStrips(); },
     }));
   }
-  put(strips, shapes);
-
-  // What dragging a selected room does. Only worth showing when there is one.
-  if (view.selected instanceof M.Room && !view.focused) {
-    const edits = el("div", "chips");
-    put(edits, el("span", "strip-label", "Dragging a room"));
-    for (const [name, label, mode, tip] of [
-      ["step", "Move", F.MOVE, "Drag the room around the floor"],
-      ["fit", "Resize", F.RESIZE,
-       "Square handles round the outside. Dragging one stretches the whole "
-       + "room and keeps its shape."],
-      ["draw", "Reshape", F.VERTICES,
-       "A round handle on every corner. Drag one to move that corner."],
-    ]) {
-      put(edits, toolButton(name, label, {
-        on: view.editMode === mode, tooltip: tip,
-        onClick: () => { view.setEditMode(mode); drawStrips(); },
-      }));
-    }
-    put(strips, edits);
-  }
-
-  put(strips, hintStrip(...hintFor()));
+  return row;
 }
 
 /** The line under the toolbar that says what to do next.
@@ -725,14 +930,33 @@ function hintFor() {
           + "corner, press a corner twice to remove it."
         : "Drag the room to move it.");
     return [`${view.selected.name} selected. ${mode} Press it twice to step `
-            + "inside and work on what is in it."];
+            + `inside${profile.view3d ? " and see it in 3D" : ""}.`,
+            editModeButtons()];
   }
 
-  return [profile.floors.length && floor?.rooms.length
-    ? "Press a room to select it. Press it twice to step inside. Two fingers, "
-      + "or the wheel, move the camera."
-    : "Nothing on this floor yet. Pick a shape above and drag it out, or use "
-      + "Draw room to place the corners yourself."];
+  if (profile.floors.length && floor?.rooms.length) {
+    // Saying "and see it in 3D" while the switch is on is what stops that
+    // switch being a button that appears to do nothing. Pressed out here on
+    // the floor it changes no pixels, because 3D only replaces the canvas
+    // once you are inside a room. This line is where it says so.
+    return [`Press a room to select it. Press it twice to step inside${
+      profile.view3d ? " and see it in 3D" : ""}. Two fingers, or the wheel, `
+      + "move the camera."];
+  }
+
+  // An empty floor, which is where everybody starts, so it gets the one
+  // button rather than a description of where to find it.
+  //
+  // This used to read "pick a shape above", which was true when the shapes
+  // were a row that was always there. They are not any more, and a line
+  // pointing at something that is not on the screen is worse than no line:
+  // the reader concludes the app is broken rather than that the sentence is
+  // out of date. So it names the button that reveals them, and hands it over.
+  return ["Nothing on this floor yet. Draw room lets you place the corners "
+          + "yourself, or start from a ready-made shape.",
+          button("Draw room", "primary small",
+                 () => view.setMode(F.DRAW),
+                 "Place the corners of a room, or pick a ready-made shape")];
 }
 
 // ---------------------------------------------------------------------------
@@ -870,16 +1094,29 @@ function roomPanel(panel, chosen) {
   put(lock, tick, el("span", "small", "Locked, so it cannot be moved by accident"));
   put(panel, lock);
 
-  const stepIn = button("", "small", () => view.stepInto(chosen),
-                        "Work on what is in this room");
+  // Step inside goes through the view rather than setting anything here, so
+  // that it lands in steppedInto() like a double-click on the canvas does and
+  // gets the same answer about 3D. Two ways in that decide separately is how
+  // one of them ends up flat and the other does not.
+  const stepIn = button("", profile.view3d ? "small" : "primary small",
+                        () => view.stepInto(chosen),
+                        profile.view3d
+                          ? "Work on what is in this room, in 3D"
+                          : "Work on what is in this room");
   put(stepIn, icon("step"), el("span", null, "Step inside"));
-  const three = button("", "primary small", () => {
-    room = chosen;
-    where = "room";
-    showWorkspace();
-  }, "See this room in 3D");
-  put(three, icon("three"), el("span", null, "3D view"));
-  put(panel, put(el("div", "row"), stepIn, three));
+  const row = put(el("div", "row"), stepIn);
+
+  // A separate 3D button only earns its place while the switch is off. With
+  // it on, Step inside already gives you 3D and a second button promising the
+  // same thing is just something else to read.
+  if (!profile.view3d) {
+    const three = button("", "primary small", () => seeItInThree(chosen),
+                         "See this one room in 3D, without turning 3D on for "
+                         + "the rest of them");
+    put(three, icon("three"), el("span", null, "3D view"));
+    put(row, three);
+  }
+  put(panel, row);
 
   put(panel, el("p", "note small",
     `${chosen.points.length} corners, ${chosen.containers.length} container${

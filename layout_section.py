@@ -209,6 +209,12 @@ class LayoutSection(QWidget):
         self.profile = None
         self.current_index = -1
 
+        # The room somebody pressed Escape in, held by id so that the 3D view
+        # does not immediately hand it back. Not saved with the profile: it is
+        # a note about right now, not a setting, and it expires the moment you
+        # step out of that room.
+        self._flat_for = None
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -246,6 +252,7 @@ class LayoutSection(QWidget):
         self.room_3d.renameRequested.connect(self._rename_subject)
         self.room_3d.deleteRequested.connect(self._delete_container)
         self.room_3d.exitRequested.connect(lambda: self.view.set_focused_room(None))
+        self.room_3d.flatRequested.connect(self._see_it_flat)
 
         self._canvas_stack = QStackedWidget()
         self._canvas_stack.addWidget(self.view)
@@ -613,6 +620,11 @@ class LayoutSection(QWidget):
         self.dataChanged.emit()
 
     def _on_room_focused(self, room):
+        # Leaving a room, or walking into a different one, expires the Escape
+        # note. Walking back in should give you 3D like any other room would.
+        if room is None or room.id != self._flat_for:
+            self._flat_for = None
+
         # The inspector needs to know too, so its "Work inside this room"
         # button can say you are already in there.
         self.inspector.set_focused_room(room)
@@ -636,10 +648,18 @@ class LayoutSection(QWidget):
         return self._canvas_stack.currentWidget() is self.room_3d
 
     def _want_3d(self):
-        """Should it be? Only inside a room, and only if the profile says so."""
+        """Should it be? Only inside a room, and only if the profile says so.
+
+        And only if Escape has not just asked for this particular room flat.
+        That note is not the setting: the setting stays on, so the next room
+        you walk into still opens in 3D. It is a "not this one, not now".
+        """
         if self.profile is None or not self.profile.view_3d:
             return False
-        return self.view.focused_room_item is not None
+        here = self.view.focused_room_item
+        if here is None:
+            return False
+        return self._flat_for != here.room.id
 
     def _update_canvas(self):
         """Put the right view in the slot, and keep it pointed at the room.
@@ -664,8 +684,33 @@ class LayoutSection(QWidget):
             self.room_3d.set_room(None, None)
             self._canvas_stack.setCurrentWidget(self.view)
 
+    def _see_it_flat(self):
+        """Escape in the 3D room: the flat plan of it, without leaving it."""
+        here = self.view.focused_room_item
+        if here is None:
+            return
+        self._flat_for = here.room.id
+        self._update_canvas()
+        self._hint.setText(
+            f"{short(here.room.name)} flat · press 3D room to see it again, "
+            f"Esc to step out")
+
     def _toggle_3d(self, checked):
         """The toolbar switch. Saved with the profile, so it is remembered."""
+        # Pressed while a room is showing flat because of Escape, with the
+        # setting still on. That press means "give me 3D back": the setting is
+        # already on, so turning it off would only be agreeing with what is
+        # already on the screen.
+        if (self._flat_for is not None and self.profile is not None
+                and self.profile.view_3d):
+            self._flat_for = None
+            self._view_3d_button.blockSignals(True)
+            self._view_3d_button.setChecked(True)
+            self._view_3d_button.blockSignals(False)
+            self._update_canvas()
+            return
+
+        self._flat_for = None
         if self.profile is not None:
             self.profile.view_3d = bool(checked)
             self.dataChanged.emit()

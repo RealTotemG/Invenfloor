@@ -51,11 +51,14 @@ export class RoomView {
    *                   save. Not called while the drag is still in progress.
    * @param onSelected called when the selection changes
    */
-  constructor(canvas, { onChanged = () => {}, onSelected = () => {} } = {}) {
+  constructor(canvas, {
+    onChanged = () => {}, onSelected = () => {}, onEscape = () => {},
+  } = {}) {
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
     this.onChanged = onChanged;
     this.onSelected = onSelected;
+    this.onEscape = onEscape;
 
     this.profile = null;
     this.room = null;
@@ -69,14 +72,46 @@ export class RoomView {
     this.watcher = new ResizeObserver(() => this.resize());
     this.watcher.observe(canvas.parentElement ?? canvas);
 
-    canvas.addEventListener("pointerdown", event => this.pressed(event));
-    canvas.addEventListener("pointermove", event => this.moved(event));
-    canvas.addEventListener("pointerup", event => this.released(event));
-    canvas.addEventListener("pointercancel", event => this.released(event));
+    // Kept in a list so stop() can take every one of them off again. The
+    // keyboard one is on the window rather than the canvas, and a window
+    // listener that outlives the view it belongs to is how you end up with
+    // two dead 3D views quietly answering Escape.
+    this.listeners = [
+      [canvas, "pointerdown", event => this.pressed(event)],
+      [canvas, "pointermove", event => this.moved(event)],
+      [canvas, "pointerup", event => this.released(event)],
+      [canvas, "pointercancel", event => this.released(event)],
+      [window, "keydown", event => this.keyDown(event)],
+    ];
+    for (const [target, name, handler] of this.listeners) {
+      target.addEventListener(name, handler);
+    }
   }
 
   stop() {
     this.watcher.disconnect();
+    for (const [target, name, handler] of this.listeners) {
+      target.removeEventListener(name, handler);
+    }
+  }
+
+  /** Escape, one rung at a time.
+   *
+   *  The same ladder the flat view has: let go of what is selected first, and
+   *  only leave the room once there is nothing left to let go of. Somebody
+   *  pressing Escape to deselect a shelf does not expect to be thrown out of
+   *  the room, and somebody pressing it twice expects to be.
+   */
+  keyDown(event) {
+    if (event.target instanceof HTMLInputElement) return;
+    if (event.target instanceof HTMLTextAreaElement) return;
+    if (event.key !== "Escape") return;
+
+    if (this.selectedId) {
+      this.select(null);
+      return;
+    }
+    this.onEscape();
   }
 
   /** What to draw. Pass null for the room to show nothing. */

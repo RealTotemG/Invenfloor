@@ -71,6 +71,7 @@ class RoomView3D(QWidget):
     renameRequested = Signal(object)      # a Container
     deleteRequested = Signal(object)      # a Container
     exitRequested = Signal()              # clicked away; step out of the room
+    flatRequested = Signal()              # Escape; show this room flat, stay in it
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -584,10 +585,19 @@ class RoomView3D(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
+            # A ladder, one rung per press, the same one the flat canvas has.
+            # Escape used to throw you straight out of the room from anywhere,
+            # so pressing it to let go of a shelf took the whole room with it.
+            #
+            # The middle rung is the room drawn flat, still standing in it.
+            # Leaving the room is the rung below that, which is what the exit
+            # button in the corner has always done.
             if self.adding:
                 self.set_adding(False)
+            elif self.selected is not None:
+                self.select(None)
             else:
-                self.exitRequested.emit()
+                self.flatRequested.emit()
             return
         if event.key() == Qt.Key_Delete and self.selected is not None:
             self.deleteRequested.emit(self.selected)
