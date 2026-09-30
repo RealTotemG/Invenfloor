@@ -2,6 +2,24 @@
  * app.js
  * ======
  *
+ * Invenfloor: draw your floor plan and find where things are.
+ * Copyright (C) 2026 Malachi (RealTotemG)
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version. It is distributed in the hope that it will be
+ * useful, but WITHOUT ANY WARRANTY, without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the LICENSE file at
+ * the top of the repository, or <https://www.gnu.org/licenses/>, for the terms.
+ *
+ * Section 13 of that license is why the footer carries a Source link: a
+ * program people reach over a network has to offer them its source, and this
+ * one is reached over a network.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ *
  * The shell: what is on screen, and what happens when you press things.
  *
  * Three places. The launcher lists the profiles saved in this browser and
@@ -1301,4 +1319,23 @@ try {
   console.warn("[app] no storage:", error);
   store = null;
 }
-showLauncher();
+
+// ?demo opens the made-up house straight away instead of the profile screen.
+//
+// It exists so the portfolio site can put THIS on its front page rather than
+// a hand-written imitation of it. The imitation was seven hundred lines of a
+// second drawing implementation, and a second implementation of anything is a
+// promise to fix every bug twice: the draw-order bug lived on in that copy for
+// weeks after iso.js was right, because nobody thinks to go and check the
+// demo. A page that frames the real app cannot be out of date with the real
+// app.
+//
+// Everything past this line is the ordinary app. The flag decides what is
+// open when you arrive and nothing else, so a visitor can press Profiles and
+// find their own, and Keep still keeps. `false` is the same second argument
+// the "Open a made-up house" button passes: not kept until somebody says so.
+if (new URLSearchParams(location.search).has("demo")) {
+  openProfile(sample(), false);
+} else {
+  showLauncher();
+}

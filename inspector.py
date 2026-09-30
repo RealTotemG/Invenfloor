@@ -408,7 +408,7 @@ class Inspector(QWidget):
             "drag containers around", size="sm")
 
     def _size_block(self, layout, room):
-        """Exact length and width boxes.
+        """Exact width and depth boxes.
 
         The handles on the canvas are quicker, but if you know a room is four
         meters across you want to type it, not nudge it.
@@ -454,15 +454,23 @@ class Inspector(QWidget):
         width_field.valueChanged.connect(apply_size)
         height_field.valueChanged.connect(apply_size)
 
-        # LENGTH and WIDTH, not width and height. A floor plan has two
-        # measurements and neither of them is height: height is how tall a
-        # container stands, and it has nothing to do with the shape of a
-        # room. The model still calls the second one `h`, because it is
-        # written into every save file and it means depth on the plan. See
-        # the note on Container in models.py.
-        row.addWidget(_dim_label("L"))
-        row.addWidget(width_field, 1)
+        # WIDTH and DEPTH. Not width and height, because height is how tall a
+        # container stands and has nothing to do with the shape of a room;
+        # and not length and width, which was the first try, because L and W
+        # do not say which of them runs which way. Width is across, depth is
+        # away from you, and nobody has to guess.
+        #
+        # The browser version says the same two words. Two people testing two
+        # versions of the same app have to be able to describe the same box
+        # the same way, or every measurement in a bug report needs a
+        # translation first.
+        #
+        # The model still calls the second one `h`, because it is written into
+        # every save file and it means depth on the plan. See the note on
+        # Container in models.py.
         row.addWidget(_dim_label("W"))
+        row.addWidget(width_field, 1)
+        row.addWidget(_dim_label("D"))
         row.addWidget(height_field, 1)
         layout.addLayout(row)
 
@@ -607,20 +615,26 @@ class Inspector(QWidget):
         width_field.valueChanged.connect(apply_size)
         height_field.valueChanged.connect(apply_size)
 
-        # LENGTH, WIDTH and HEIGHT on one line, in that order.
+        # WIDTH, DEPTH and HEIGHT on one line, in that order.
         #
-        # Length and width are the footprint, the two measurements a floor
-        # plan actually has. Height is how tall the thing stands, which only
-        # the 3D view draws. They used to be two sections with a heading and
-        # a paragraph each, which is a lot of panel for three numbers that
-        # belong together: they are the size of the object.
+        # Width and depth are the footprint, the two measurements a floor plan
+        # actually has. Height is how tall the thing stands, which only the 3D
+        # view draws. They used to be two sections with a heading and a
+        # paragraph each, which is a lot of panel for three numbers that belong
+        # together: they are the size of the object.
+        #
+        # This row used to read L, W, H, and that was the worse of the two
+        # mistakes available. W sitting next to H invites anybody to read them
+        # as width and height, which is exactly what they are not: the W was
+        # the depth. Width, depth, height is the ordinary triple and it is
+        # also what the browser version says.
         #
         # The model still calls the second one `h`. It is in every save file
         # and it means depth on the plan, not height; see Container in
         # models.py.
-        row.addWidget(_dim_label("L"))
-        row.addWidget(width_field, 1)
         row.addWidget(_dim_label("W"))
+        row.addWidget(width_field, 1)
+        row.addWidget(_dim_label("D"))
         row.addWidget(height_field, 1)
         row.addWidget(_dim_label("H"))
         row.addWidget(self._height_picker(container), 1)

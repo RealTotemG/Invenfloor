@@ -32,7 +32,7 @@
 /** Bumped by hand when a batch goes out. Dated rather than numbered, because
  *  the useful question in a bug report is "how old is this" and a date
  *  answers it without anybody having to look up a changelog. */
-export const VERSION = "2026-09-28";
+export const VERSION = "2026-09-29";
 
 
 // The last thing that went wrong, or null. Kept here rather than in a
@@ -84,10 +84,22 @@ function storageState(store) {
 }
 
 
-/** The footer: version, and the button that opens the report.
+/** The footer: version, where the source is, and the button that opens the
+ *  report.
  *
  *  `issuesUrl` is where a report goes. Passed in rather than written here so
  *  that moving the project does not mean editing two files.
+ *
+ *  THE SOURCE LINK IS NOT DECORATION.
+ *  ---------------------------------
+ *  This is under the AGPL, and section 13 of that license says a program
+ *  people reach over a network has to prominently offer them its source. A
+ *  link in the footer of the first screen is the ordinary way to do that, and
+ *  leaving it out would put the project in breach of its own license.
+ *
+ *  It is also just the right thing on a page whose entire pitch is that
+ *  nothing you type leaves your machine. That claim is worth exactly as much
+ *  as somebody's ability to go and check it.
  */
 export function footer(store, savedCount, issuesUrl, make) {
   const { el, put, button } = make;
@@ -95,9 +107,20 @@ export function footer(store, savedCount, issuesUrl, make) {
   const bar = el("footer", "note faint about");
   const opened = el("div");
 
+  // Straight off the issues URL, so there is still only one address written
+  // down anywhere and moving the project still means editing one line.
+  const sourceUrl = issuesUrl.replace(/\/issues\/?$/, "");
+  const source = el("a", null, "Source");
+  source.href = sourceUrl;
+  source.target = "_blank";
+  source.rel = "noopener";
+  source.title = "The whole program, on GitHub";
+
   put(bar,
       el("span", null, `Invenfloor ${VERSION} · everything you save stays `
                      + `in this browser · `),
+      source,
+      el("span", null, " · "),
       button("Something wrong?", "quiet small", () => {
         if (opened.firstChild) { opened.replaceChildren(); return; }
         put(opened, problemPanel(store, savedCount, issuesUrl, make));

@@ -7,6 +7,23 @@
 <title>Invenfloor</title>
 <meta name="description" content="Draw your floor plan, put shelves in it, and
       find where things are. Everything stays in your own browser.">
+
+<!-- The icon, and the bits that let a phone keep this on its home screen.
+
+     Worth the four lines: a stock count happens standing in the room holding
+     a phone, and the difference between a bookmark and a home screen icon is
+     whether anybody does it a second time. With the manifest below, Add to
+     Home Screen on Android gives a proper standalone window with no browser
+     chrome; apple-touch-icon is the same job on iOS, which ignores the
+     manifest's icons and reads this instead.
+
+     theme-color paints the phone's own status bar to match the app, so the
+     top inch of the screen stops being a white stripe over a dark page. -->
+<link rel="icon" href="invenfloor.png">
+<link rel="apple-touch-icon" href="invenfloor.png">
+<link rel="manifest" href="app.webmanifest">
+<meta name="theme-color" content="#0d0f14">
+
 <link rel="stylesheet" href="app.css">
 
 <!--

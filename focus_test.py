@@ -195,13 +195,31 @@ def main():
     section.inspector.show_selection(workshop)
     settle()
 
+    # W and D, matching the browser version word for word. Two testers on two
+    # versions have to be able to describe the same box the same way, and the
+    # old L and W did not even say which way round they were.
     captions = [found.text() for found in section.inspector.findChildren(QLabel)
-                if found.text() in ("Size", "Position", "L", "W", "X", "Y")]
+                if found.text() in ("Size", "Position", "W", "D", "H", "X", "Y")]
     check("a room has boxes for where it is as well as how big it is",
-          captions == ["Size", "L", "W", "Position", "X", "Y"], str(captions))
+          captions == ["Size", "W", "D", "Position", "X", "Y"], str(captions))
     check("and there are four of them to type in",
           len(section.inspector.findChildren(QSpinBox)) == 4,
           f"{len(section.inspector.findChildren(QSpinBox))} boxes")
+
+    # A container has all three, and the order is the point. W beside H reads
+    # as width and height to anybody who has ever measured anything, and the W
+    # was the depth, so the one row that carried all three numbers was also the
+    # one most likely to be read backwards.
+    section.inspector.show_selection(workshop.containers[0])
+    settle()
+    container_captions = [
+        found.text() for found in section.inspector.findChildren(QLabel)
+        if found.text() in ("W", "D", "H", "L")]
+    check("a container reads width, depth, height, in that order",
+          container_captions == ["W", "D", "H"], str(container_captions))
+
+    section.inspector.show_selection(workshop)
+    settle()
 
     def panel_says(phrase):
         return any(phrase in found.text()

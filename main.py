@@ -2,6 +2,19 @@
 main.py
 =======
 
+Invenfloor: draw your floor plan and find where things are.
+Copyright (C) 2026 Malachi (RealTotemG)
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. It is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY, without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the LICENSE file next to this one, or
+<https://www.gnu.org/licenses/>, for the terms.
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+
 Start the app with:   python main.py
 
 This file is deliberately tiny. It creates the application, applies the theme,

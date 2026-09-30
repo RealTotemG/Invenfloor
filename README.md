@@ -7,9 +7,27 @@ I manage inventory for a living, and every home inventory app I tried was just
 a list. A list doesn't help when the question is "which drawer did I put that
 in?" So this one is built around a map.
 
-Python and PySide6 (Qt).
+**Use it here: https://realtotemg.github.io/Invenfloor/** No account, no
+install, nothing uploaded. Everything you put in stays in your own browser.
 
-## Getting it running
+Testing it for me? [TESTING.md](TESTING.md) says what is worth trying and how
+to tell me when something breaks.
+
+## Two versions, and which one is the real one
+
+This started as a Windows desktop app in Python and PySide6. That is still in
+this repo and still runs. The browser version is where the work goes now: it
+installs nowhere, it works on a phone, and a stock count happens standing in
+the room rather than at a desk, which is the whole argument.
+
+The desktop version keeps earning its place as the reference. The two are
+separate implementations of the same model, so they get handed the same 6,358
+questions and have to give the same answers. That harness has caught a real
+divergence neither side's own tests would have found: a float tie-break at the
+exact center of a circular room, where Python and JavaScript picked different
+nearest edges. Retiring something as a product is not the same as deleting it.
+
+## Getting the desktop one running
 
 ```
 pip install -r requirements.txt
@@ -18,6 +36,10 @@ python main.py
 
 You only need the pip line once. If Windows doesn't recognize `python`, try
 `py main.py` instead.
+
+The browser one needs no install at all, but it will not work if you
+double-click `web/index.html`: browsers refuse to load modules over a `file://`
+address. Serve the `web` folder over HTTP, or use the link at the top.
 
 ## How the data is organized
 
@@ -1167,3 +1189,28 @@ one, because a 16 pixel icon made by shrinking a 256 pixel one is mud.
   quantities, get a summary of what changed at the end.
 - **Container shapes.** Containers are rectangles right now. They could use the
   same polygon code rooms use.
+
+## The license
+
+AGPL-3.0-or-later. The full text is in `LICENSE`.
+
+The short version: anybody may use this, read it, change it and pass it on. If
+they change it and run their version as a website, they have to publish their
+changes. That last clause is the whole reason for picking this license over
+MIT. The app is a web page, so its source is readable by anyone who visits
+whatever the license says; what the license decides is whether somebody may
+take it, close it and host it as their own. Under the AGPL they may not.
+
+I hold the copyright, so the AGPL binds everybody else and not me. If somebody
+wants to build on this without publishing their changes, that is a commercial
+license and a conversation, not a thing the AGPL forbids outright.
+
+Two practical consequences worth knowing:
+
+- **The footer has to carry a Source link.** Section 13 says a program people
+  reach over a network has to offer them its source. `about.js` builds that
+  link off the issues URL so there is still only one address written down.
+- **Contributions arrive under the same license.** There is no contributor
+  agreement here, so a patch somebody sends is AGPL too. If I ever want to sell
+  a closed version, every contributor's permission is part of the price, which
+  is a good reason to keep track of who has sent what.
